@@ -5,6 +5,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ระบบคำนวณบอล FiveM (ค่าน้ำ 1.8)</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!--
+═══════════════════════════════════════════════════════════
+🗄️ SQL ที่ต้องรันใน Supabase ก่อนใช้ (SQL Editor → New query → Run):
+
+create table fivem_bets (id text primary key, data jsonb not null);
+create table fivem_matches (id text primary key, data jsonb not null);
+create table fivem_settings (id text primary key, data jsonb not null);
+create table fivem_users (id text primary key, data jsonb not null);
+
+alter table fivem_bets enable row level security;
+alter table fivem_matches enable row level security;
+alter table fivem_settings enable row level security;
+alter table fivem_users enable row level security;
+
+create policy "open_bets" on fivem_bets for all to anon, authenticated using (true) with check (true);
+create policy "open_matches" on fivem_matches for all to anon, authenticated using (true) with check (true);
+create policy "open_settings" on fivem_settings for all to anon, authenticated using (true) with check (true);
+create policy "open_users" on fivem_users for all to anon, authenticated using (true) with check (true);
+═══════════════════════════════════════════════════════════
+-->
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -76,6 +97,8 @@
         .status-win { color: #4caf50; font-weight: bold; }
         .status-lose { color: #f44336; font-weight: bold; }
         .status-refund { color: #29b6f6; font-weight: bold; }
+        .status-half_win { color: #8bc34a; font-weight: bold; }
+        .status-half_loss { color: #ff7043; font-weight: bold; }
         .summary-box {
             display: flex;
             justify-content: space-around;
@@ -247,7 +270,6 @@
         .user-mgmt-form div { min-width: 120px; }
         .user-mgmt-form label { font-size: 13px; color: #aaa; }
 
-        /* แก้ไข: เอา !important ออก เพื่อให้ toggle class ทำงานได้ */
         .viewer-hide { display: none; }
 
         @media (max-width: 768px) {
@@ -306,7 +328,7 @@
         <button class="danger viewer-hide" onclick="clearAllData()">🗑️ ล้างข้อมูลทั้งหมด</button>
     </div>
 
-    <!-- จัดการผู้ใช้ (Admin เท่านั้น, ไม่มี viewer-hide จัดการด้วย JS เอง) -->
+    <!-- จัดการผู้ใช้ -->
     <div class="card" id="userMgmtCard" style="display:none;">
         <h2>👥 จัดการผู้ใช้งาน</h2>
         <div class="user-mgmt-form">
@@ -484,7 +506,14 @@
 
 <script>
 // ============================================================
-// ===== ระบบล็อกอิน =====
+// ===== 🌩️ SUPABASE : เปลี่ยน 2 ค่านี้เป็นของคุณ! (Settings → API) =====
+// ============================================================
+const SUPABASE_URL = 'https://kpwpebazqxqezwqqnnub.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtwd3BlYmF6cXhxZXp3cXFubnViIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc1MDc4NzksImV4cCI6MjEwMzA4Mzg3OX0.z7SYhrO-2L01XzROu1_xVJ1LsE7cmLB2JpxT6P37yxU';                  // 🔴 เปลี่ยนตรงนี้
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ============================================================
+// ===== ระบบล็อกอิน (session ต่อเครื่อง / ผู้ใช้จากคลาวด์) =====
 // ============================================================
 const SESSION_KEY = 'fivemSession';
 const USERS_KEY = 'fivemUsers';
@@ -493,15 +522,11 @@ let currentUser = null;
 let sessionTimer = null;
 let lastActivity = Date.now();
 
-function initUsers() {
-    let u = JSON.parse(localStorage.getItem(USERS_KEY));
-    if (!u || !u.length) {
-        u = [{ username: 'admin', password: '1234', role: 'admin', name: 'เจ้ามือ' }];
-        localStorage.setItem(USERS_KEY, JSON.stringify(u));
-    }
-}
-function getUsers() { return JSON.parse(localStorage.getItem(USERS_KEY)) || []; }
-function saveUsers(u) { localStorage.setItem(USERS_KEY, JSON.stringify(u)); }
+let cloudUsers = []; // ผู้ใช้ทั้งหมดจาก Supabase
+
+function initUsers() { /* ใช้คลาวด์แล้ว จัดการใน loadAllFromCloud */ }
+function getUsers() { return cloudUsers; }
+function saveUsers(u) { cloudUsers = u; syncUsers(); }
 function isAdmin() { return currentUser && currentUser.role === 'admin'; }
 
 function doLogin() {
@@ -522,7 +547,6 @@ function doLogout() {
     currentUser = null;
     localStorage.removeItem(SESSION_KEY);
     if (sessionTimer) clearInterval(sessionTimer);
-    // รีเซ็ต userMgmtCard ด้วย
     const mgmtCard = document.getElementById('userMgmtCard');
     if (mgmtCard) mgmtCard.style.display = 'none';
     document.getElementById('mainApp').style.display = 'none';
@@ -559,22 +583,13 @@ function showMainApp() {
     startSessionTimer();
 }
 
-// ===== แก้ไขจุดสำคัญ: toggle class แทน inline style =====
 function applyRoleUI() {
     document.querySelectorAll('.viewer-hide').forEach(el => {
-        if (isAdmin()) {
-            el.classList.remove('viewer-hide');
-        } else {
-            el.classList.add('viewer-hide');
-        }
+        if (isAdmin()) el.classList.remove('viewer-hide');
+        else el.classList.add('viewer-hide');
     });
-
-    // userMgmtCard: ไม่มี viewer-hide แล้ว จัดการด้วย JS เท่านั้น
     const mgmtCard = document.getElementById('userMgmtCard');
-    if (mgmtCard && !isAdmin()) {
-        mgmtCard.style.display = 'none';
-    }
-
+    if (mgmtCard && !isAdmin()) mgmtCard.style.display = 'none';
     document.getElementById('actionCol').style.display = isAdmin() ? '' : 'none';
 }
 
@@ -652,19 +667,117 @@ function doChangePassword() {
 document.getElementById('changePassModal').addEventListener('click', function(e) { if (e.target === this) this.style.display = 'none'; });
 
 // ============================================================
-// ===== ระบบหลัก (โค้ดเดิมทั้งหมด) =====
+// ===== ระบบหลัก =====
 // ============================================================
+let bets = [];
+let matchesMasterList = [];
+let currentMatches = [];
 
-let bets = JSON.parse(localStorage.getItem('fivemBets')) || [];
-let matchesMasterList = JSON.parse(localStorage.getItem('fivemMatchesMaster')) || [];
-let currentMatches = []; 
+let settings = { winOdds: 1.8, halfWinOdds: 1.4, maxSingle: 0, maxStep: 0, maxPayout: 0 };
 
-let settings = JSON.parse(localStorage.getItem('fivemSettings')) || { 
-    winOdds: 1.8, halfWinOdds: 1.4, maxSingle: 0, maxStep: 0, maxPayout: 0 
-};
+let currentSearch = "";
+let currentStatusFilter = "";
+let currentDateFilter = "";
+let changeTeamBetId = null;
+
+// ============================================================
+// ===== 🌩️ SUPABASE SYNC (ข้อมูลรวมกลาง ทุกเครื่องเห็นเหมือนกัน) =====
+// ============================================================
+async function loadAllFromCloud() {
+    try {
+        const [betsRes, matchRes, setRes, userRes] = await Promise.all([
+            sb.from('fivem_bets').select('id, data').order('id'),
+            sb.from('fivem_matches').select('id, data').order('id'),
+            sb.from('fivem_settings').select('data').eq('id', 'main').maybeSingle(),
+            sb.from('fivem_users').select('id, data')
+        ]);
+        if (betsRes.error) throw betsRes.error;
+        if (matchRes.error) throw matchRes.error;
+        if (userRes.error) throw userRes.error;
+
+        bets = (betsRes.data || []).map(r => r.data);
+        matchesMasterList = (matchRes.data || []).map(r => r.data);
+
+        if (setRes.data && setRes.data.data) settings = setRes.data.data;
+        else {
+            const localSet = JSON.parse(localStorage.getItem('fivemSettings') || 'null');
+            if (localSet) settings = localSet;
+            syncSettings();
+        }
+
+        const u = userRes.data || [];
+        if (u.length === 0) {
+            const local = JSON.parse(localStorage.getItem(USERS_KEY) || '[]');
+            cloudUsers = local.length ? local : [{ username: 'admin', password: '1234', role: 'admin', name: 'เจ้ามือ' }];
+            syncUsers();
+        } else {
+            cloudUsers = u.map(r => r.data);
+        }
+    } catch (e) {
+        console.error('loadAllFromCloud:', e);
+        alert('⚠️ เชื่อมต่อฐานข้อมูลไม่สำเร็จ ลองรีเฟรชอีกครั้ง\n' + (e.message || ''));
+    }
+}
+
+async function migrateLocalToCloud() {
+    const localBets = JSON.parse(localStorage.getItem('fivemBets') || '[]');
+    const localMatches = JSON.parse(localStorage.getItem('fivemMatchesMaster') || '[]');
+    if (bets.length === 0 && matchesMasterList.length === 0 && (localBets.length || localMatches.length)) {
+        if (confirm('พบข้อมูลเก่าในเครื่องนี้ ย้ายขึ้นคลาวด์เลยไหม? (เพื่อให้ทุกเครื่องเห็นข้อมูลชุดเดียวกัน)')) {
+            bets = localBets;
+            matchesMasterList = localMatches;
+            await syncBets();
+            await syncMatches();
+            alert('ย้ายข้อมูลเรียบร้อย ✅');
+        }
+    }
+}
+
+async function syncBets() {
+    try {
+        const rows = bets.map(b => ({ id: String(b.id), data: b }));
+        if (rows.length) await sb.from('fivem_bets').upsert(rows, { onConflict: 'id' });
+        const { data: all } = await sb.from('fivem_bets').select('id');
+        const ids = new Set(rows.map(r => r.id));
+        const gone = (all || []).filter(r => !ids.has(r.id)).map(r => r.id);
+        if (gone.length) await sb.from('fivem_bets').delete().in('id', gone);
+    } catch (e) { console.error('syncBets:', e); }
+}
+
+async function syncMatches() {
+    try {
+        const rows = matchesMasterList.map(m => ({ id: String(m.id), data: m }));
+        if (rows.length) await sb.from('fivem_matches').upsert(rows, { onConflict: 'id' });
+        const { data: all } = await sb.from('fivem_matches').select('id');
+        const ids = new Set(rows.map(r => r.id));
+        const gone = (all || []).filter(r => !ids.has(r.id)).map(r => r.id);
+        if (gone.length) await sb.from('fivem_matches').delete().in('id', gone);
+    } catch (e) { console.error('syncMatches:', e); }
+}
+
+async function syncUsers() {
+    try {
+        const rows = cloudUsers.map(u => ({ id: u.username, data: u }));
+        if (rows.length) await sb.from('fivem_users').upsert(rows, { onConflict: 'id' });
+        const { data: all } = await sb.from('fivem_users').select('id');
+        const ids = new Set(rows.map(r => r.id));
+        const gone = (all || []).filter(r => !ids.has(r.id)).map(r => r.id);
+        if (gone.length) await sb.from('fivem_users').delete().in('id', gone);
+    } catch (e) { console.error('syncUsers:', e); }
+}
+
+async function syncSettings() {
+    try { await sb.from('fivem_settings').upsert({ id: 'main', data: settings }); }
+    catch (e) { console.error('syncSettings:', e); }
+}
+
+function saveData() { syncBets(); }
+function saveMatches() { syncMatches(); }
+
+// ============================================================
+// ===== ตั้งค่า =====
+// ============================================================
 function loadSettings() {
-    const s = JSON.parse(localStorage.getItem('fivemSettings'));
-    if (s) settings = s;
     document.getElementById('winOddsInput').value = settings.winOdds;
     document.getElementById('halfWinOddsInput').value = settings.halfWinOdds;
     document.getElementById('maxSingleInput').value = settings.maxSingle;
@@ -672,12 +785,21 @@ function loadSettings() {
     document.getElementById('maxPayoutInput').value = settings.maxPayout;
 }
 
-let currentSearch = "";
-let currentStatusFilter = "";
-let currentDateFilter = "";
-let changeTeamBetId = null;
+function saveSettings() {
+    settings = {
+        winOdds: parseFloat(document.getElementById('winOddsInput').value) || 1.8,
+        halfWinOdds: parseFloat(document.getElementById('halfWinOddsInput').value) || 1.4,
+        maxSingle: parseFloat(document.getElementById('maxSingleInput').value) || 0,
+        maxStep: parseFloat(document.getElementById('maxStepInput').value) || 0,
+        maxPayout: parseFloat(document.getElementById('maxPayoutInput').value) || 0
+    };
+    syncSettings();
+    alert('บันทึกการตั้งค่าเรียบร้อย (ทุกเครื่องจะใช้ค่านี้)');
+}
 
-// ================ ฟังก์ชันจัดการคู่บอลประจำวัน ================
+// ============================================================
+// ===== จัดการคู่บอลประจำวัน =====
+// ============================================================
 function addMasterMatch() {
     const date = document.getElementById('masterDate').value;
     const time = document.getElementById('masterTime').value;
@@ -686,7 +808,7 @@ function addMasterMatch() {
     const team2 = document.getElementById('masterTeam2').value.trim();
     if (!date || !time || !name || !team1 || !team2) { alert('กรุณากรอกข้อมูลคู่บอลให้ครบทุกช่อง'); return; }
     matchesMasterList.push({ id: Date.now(), date, time, name, teams: [team1, team2], locked: false });
-    localStorage.setItem('fivemMatchesMaster', JSON.stringify(matchesMasterList));
+    saveMatches();
     document.getElementById('masterMatchName').value = '';
     document.getElementById('masterTeam1').value = '';
     document.getElementById('masterTeam2').value = '';
@@ -696,9 +818,9 @@ function addMasterMatch() {
 
 function deleteMasterMatch(id) {
     if (!isAdmin()) return;
-    if(confirm('ต้องการลบคู่บอลนี้ใช่ไหม?')) {
+    if (confirm('ต้องการลบคู่บอลนี้ใช่ไหม?')) {
         matchesMasterList = matchesMasterList.filter(m => m.id !== id);
-        localStorage.setItem('fivemMatchesMaster', JSON.stringify(matchesMasterList));
+        saveMatches();
         renderMasterMatches();
         updateBetFormDropdowns();
     }
@@ -709,7 +831,7 @@ function toggleLockMatch(id) {
     const match = matchesMasterList.find(m => m.id === id);
     if (match) {
         match.locked = !match.locked;
-        localStorage.setItem('fivemMatchesMaster', JSON.stringify(matchesMasterList));
+        saveMatches();
         renderMasterMatches();
         updateBetFormDropdowns();
     }
@@ -754,7 +876,9 @@ function ensureSingleTeamOption(team) {
     }
 }
 
-// ================ ฟังก์ชันระบบเดิมพัน ================
+// ============================================================
+// ===== ระบบเดิมพัน =====
+// ============================================================
 function toggleStepMenu() {
     const type = document.getElementById('betType').value;
     document.getElementById('stepMatchesWrapper').style.display = type === 'step' ? 'block' : 'none';
@@ -870,7 +994,9 @@ function calculatePayout(type, stake, matches) {
     return { payout: finalPayout.toFixed(2), status: 'win' };
 }
 
-// ================ ฟังก์ชันเปลี่ยนทีม ================
+// ============================================================
+// ===== เปลี่ยนทีม =====
+// ============================================================
 function openChangeTeamModal(betId) {
     if (!isAdmin()) return;
     const bet = bets.find(b => b.id === betId);
@@ -920,14 +1046,16 @@ function confirmChangeTeam() {
         const result = calculatePayout(bet.betType, bet.stake, bet.matches);
         bet.payout = result.payout; bet.status = result.status;
         saveData(); renderTable(); alert('✅ เปลี่ยนทีมเรียบร้อยแล้ว!');
-    } else { alert('ไม่มีการเปลี่ยนแปลงงทีม'); }
+    } else { alert('ไม่มีการเปลี่ยนแปลงทีม'); }
     closeChangeTeamModal();
 }
 
 function closeChangeTeamModal() { changeTeamBetId = null; document.getElementById('changeTeamModal').style.display = 'none'; }
 document.getElementById('changeTeamModal').addEventListener('click', function(e) { if (e.target === this) closeChangeTeamModal(); });
 
-// ================ แก้ไข / คัดลอก / สลิป / ลบ ================
+// ============================================================
+// ===== แก้ไข / คัดลอก / สลิป / ลบ =====
+// ============================================================
 function editBet(id) {
     if (!isAdmin()) return;
     const bet = bets.find(b => b.id === id);
@@ -999,272 +1127,273 @@ function cancelEdit() {
 
 function deleteBet(id) {
     if (!isAdmin()) return;
-    if(confirm('ต้องการลบรายการนี้ใช่ไหม?')) { bets = bets.filter(b => b.id !== id); saveData(); renderTable(); }
-}
-
-function saveData() { localStorage.setItem('fivemBets', JSON.stringify(bets)); }
-function applyFilters() { currentSearch = document.getElementById('searchInput').value.toLowerCase(); currentStatusFilter = document.getElementById('filterStatus').value; currentDateFilter = document.getElementById('filterDate').value; renderTable(); }
-function clearFilters() { document.getElementById('searchInput').value = ''; document.getElementById('filterStatus').value = ''; document.getElementById('filterDate').value = ''; currentSearch = ""; currentStatusFilter = ""; currentDateFilter = ""; renderTable(); }
-function updatePlayerDatalist() { const dl = document.getElementById('playerList'); const up = [...new Set(bets.map(b => b.player).filter(p => p && p.trim() !== ''))]; dl.innerHTML = ''; up.forEach(p => { const o = document.createElement('option'); o.value = p; dl.appendChild(o); }); }
-
-function saveSettings() {
-    if (!isAdmin()) return;
-    const winOdds = parseFloat(document.getElementById('winOddsInput').value);
-    const halfWinOdds = parseFloat(document.getElementById('halfWinOddsInput').value);
-    const maxSingle = parseFloat(document.getElementById('maxSingleInput').value) || 0;
-    const maxStep = parseFloat(document.getElementById('maxStepInput').value) || 0;
-    const maxPayout = parseFloat(document.getElementById('maxPayoutInput').value) || 0;
-    if (isNaN(winOdds) || isNaN(halfWinOdds) || winOdds <= 0 || halfWinOdds <= 0) { alert('กรุณากรอกค่าน้ำเป็นตัวเลข > 0'); return; }
-    settings = { winOdds, halfWinOdds, maxSingle, maxStep, maxPayout };
-    localStorage.setItem('fivemSettings', JSON.stringify(settings));
-    bets.forEach(bet => { const result = calculatePayout(bet.betType, bet.stake, bet.matches); bet.payout = result.payout; bet.status = result.status; });
-    saveData(); renderTable(); alert('บันทึกการตั้งค่าและคำนวณยอดใหม่เรียบร้อยแล้ว!');
+    if (confirm('ต้องการลบรายการนี้ใช่ไหม?')) { bets = bets.filter(b => b.id !== id); saveData(); renderTable(); }
 }
 
 function clearAllData() {
-    if (!isAdmin()) return;
-    if (confirm('คำเตือน: การล้างข้อมูลจะลบบิลทั้งหมดออกจากระบบ และไม่สามารถู้คืนได้! คุณแน่ใจหรือไม่?')) {
-        if (confirm('ยืนยันการลบข้อมูลทั้งหมดอีกครั้ง (ลบเลยนะ!)')) { bets = []; saveData(); renderTable(); alert('ล้างข้อมูลทั้งหมดเรียบร้อยแล้ว'); }
-    }
+    if (!confirm('ล้างข้อมูลบิลทั้งหมด? ข้อมูลบนคลาวด์จะถูกลบด้วยและกู้คืนไม่ได้')) return;
+    bets = [];
+    saveData();
+    renderTable();
 }
 
-// ================ สรุปยอดแยกตามทีม ================
-function getTeamSummaryData(dateFilter) {
-    let teamData = {};
-    bets.filter(b => !dateFilter || b.date === dateFilter).forEach(bet => {
-        [...new Set(bet.matches.map(m => m.team).filter(t => t && t.trim() !== ''))].forEach(team => {
-            if (!teamData[team]) teamData[team] = { billCount: 0, singleStake: 0, stepStake: 0, payout: 0 };
-            teamData[team].billCount++;
-            if (bet.betType === 'single') teamData[team].singleStake += bet.stake;
-            else teamData[team].stepStake += bet.stake;
-            if (bet.status === 'win' || bet.status === 'refund') teamData[team].payout += parseFloat(bet.payout);
-        });
+// ============================================================
+// ===== ฟิลเตอร์ / ตารางหลัก =====
+// ============================================================
+const BILL_STATUS_TEXT = { pending: 'รอผล', win: 'ได้', lose: 'เสีย', refund: 'คืนทุน' };
+const MATCH_STATUS_TEXT = { pending: 'รอผล', win: 'ได้', half_win: 'ได้ครึ่ง', half_loss: 'เสียครึ่ง', refund: 'คืนทุน', lose: 'เสีย' };
+const THAI_TO_STATUS = { 'รอผล': 'pending', 'ได้': 'win', 'เสีย': 'lose', 'คืนทุน': 'refund', 'ได้ครึ่ง': 'half_win', 'เสียครึ่ง': 'half_loss' };
+
+function applyFilters() {
+    currentSearch = document.getElementById('searchInput').value.toLowerCase();
+    currentStatusFilter = document.getElementById('filterStatus').value;
+    currentDateFilter = document.getElementById('filterDate').value;
+    renderTable();
+}
+
+function clearFilters() {
+    document.getElementById('searchInput').value = '';
+    document.getElementById('filterStatus').value = '';
+    document.getElementById('filterDate').value = '';
+    currentSearch = ''; currentStatusFilter = ''; currentDateFilter = '';
+    renderTable();
+}
+
+function populatePlayerDatalist() {
+    const dl = document.getElementById('playerList');
+    dl.innerHTML = [...new Set(bets.map(b => b.player))].map(p => `<option value="${p}">`).join('');
+}
+
+function renderTable() {
+    const tbody = document.getElementById('betTableBody');
+    tbody.innerHTML = '';
+    populatePlayerDatalist();
+
+    const filtered = bets.filter(b => {
+        if (currentStatusFilter && b.status !== currentStatusFilter) return false;
+        if (currentDateFilter && b.date !== currentDateFilter) return false;
+        if (currentSearch) {
+            const hay = (b.player + ' ' + (b.team || '') + ' ' + b.matches.map(m => m.team + ' ' + m.match).join(' ')).toLowerCase();
+            if (!hay.includes(currentSearch)) return false;
+        }
+        return true;
+    }).sort((a, b) => b.id - a.id);
+
+    filtered.forEach(b => {
+        const matchesHtml = b.matches.map((m, idx) => {
+            const changed = m.originalTeam ? `<span class="changed-badge">🔄เปลี่ยนจาก ${m.originalTeam}</span>` : '';
+            const label = `<span style="text-align:left;">${m.match} <b style="color:#4caf50;">(${m.team})</b>${changed}</span>`;
+            if (isAdmin()) {
+                const opts = Object.entries(MATCH_STATUS_TEXT).map(([val, txt]) =>
+                    `<option value="${val}" ${m.status === val ? 'selected' : ''}>${txt}</option>`).join('');
+                return `<div class="match-row">${label}<select onchange="updateMatchStatus(${b.id}, ${idx}, this.value)">${opts}</select></div>`;
+            }
+            return `<div class="match-row">${label}<span class="status-${m.status}">${MATCH_STATUS_TEXT[m.status] || m.status}</span></div>`;
+        }).join('');
+
+        const payoutText = (b.status === 'win' || b.status === 'refund') ? Number(b.payout).toFixed(2) : '-';
+        const statusCell = `<span class="status-${b.status}">${BILL_STATUS_TEXT[b.status] || b.status}</span>`;
+        const actionCell = isAdmin() ? `<div class="action-btns">
+            <button class="edit-btn" onclick="editBet(${b.id})">แก้ไข</button>
+            <button class="duplicate-btn" onclick="duplicateBet(${b.id})">คัดลอก</button>
+            <button class="slip-btn" onclick="copySlip(${b.id})">สลิป</button>
+            <button class="change-team-btn" onclick="openChangeTeamModal(${b.id})">🔄</button>
+            <button class="danger" onclick="deleteBet(${b.id})">ลบ</button></div>` : '';
+
+        tbody.innerHTML += `<tr>
+            <td>${b.date}</td><td>${b.player}</td>
+            <td><div style="font-size:13px; color:#aaa; margin-bottom:5px;">${b.type}</div><div class="matches-display">${matchesHtml}</div></td>
+            <td>${b.stake.toFixed(2)}</td><td>${payoutText}</td><td>${statusCell}</td><td>${actionCell}</td></tr>`;
     });
-    return teamData;
+
+    if (!filtered.length) tbody.innerHTML = '<tr><td colspan="7" style="color:#888;">ไม่พบรายการ</td></tr>';
+
+    updateSummary();
+    renderDailySummary();
+    renderTeamSummary();
+    renderPlayerSummary();
 }
 
-function updateTeamSummaryDateOptions() {
-    const select = document.getElementById('teamSummaryDateFilter');
-    const currentValue = select.value;
-    const allDates = [...new Set(bets.map(b => b.date))].filter(d => d).sort().reverse();
-    select.innerHTML = '<option value="">ทุกวัน</option>';
-    allDates.forEach(date => { select.innerHTML += `<option value="${date}">${date}</option>`; });
-    if (allDates.includes(currentValue)) select.value = currentValue;
+// ============================================================
+// ===== สรุปยอด =====
+// ============================================================
+function updateSummary() {
+    let stake = 0, payout = 0, refund = 0;
+    bets.forEach(b => {
+        stake += b.stake;
+        if (b.status === 'win') payout += parseFloat(b.payout) || 0;
+        if (b.status === 'refund') refund += parseFloat(b.payout) || 0;
+    });
+    const profit = (stake - refund) - payout;
+    document.getElementById('totalStake').innerText = stake.toFixed(2);
+    document.getElementById('totalPayout').innerText = payout.toFixed(2);
+    document.getElementById('totalRefund').innerText = refund.toFixed(2);
+    const pf = document.getElementById('totalProfit');
+    pf.innerText = (profit >= 0 ? '+' : '') + profit.toFixed(2);
+    pf.className = 'num ' + (profit >= 0 ? 'profit' : 'loss');
+}
+
+function getOpponentTeam(team) {
+    const m = matchesMasterList.find(mm => mm.teams.includes(team));
+    if (m) return m.teams.find(t => t !== team) || team;
+    return team;
+}
+
+function getDailyStats() {
+    const byDate = {};
+    bets.forEach(b => { if (!byDate[b.date]) byDate[b.date] = []; byDate[b.date].push(b); });
+    return Object.keys(byDate).sort().reverse().map(date => {
+        let stake = 0, payout = 0, refund = 0;
+        const oppTeams = new Set();
+        byDate[date].forEach(b => {
+            stake += b.stake;
+            if (b.status === 'win') payout += parseFloat(b.payout) || 0;
+            if (b.status === 'refund') refund += parseFloat(b.payout) || 0;
+            b.matches.forEach(m => oppTeams.add(getOpponentTeam(m.team)));
+        });
+        return { date, teams: [...oppTeams].join(', '), stake, payout, refund, profit: (stake - refund) - payout };
+    });
+}
+
+function renderDailySummary() {
+    const tbody = document.getElementById('dailyTableBody');
+    tbody.innerHTML = getDailyStats().map(d =>
+        `<tr><td>${d.date}</td><td style="text-align:left;">${d.teams || '-'}</td><td>${d.stake.toFixed(2)}</td><td>${d.payout.toFixed(2)}</td><td>${d.refund.toFixed(2)}</td><td class="${d.profit >= 0 ? 'profit' : 'loss'}">${d.profit >= 0 ? '+' : ''}${d.profit.toFixed(2)}</td></tr>`
+    ).join('');
+    if (!tbody.innerHTML) tbody.innerHTML = '<tr><td colspan="6" style="color:#888;">ไม่มีข้อมูล</td></tr>';
 }
 
 function renderTeamSummary() {
-    const dateFilter = document.getElementById('teamSummaryDateFilter').value;
+    const filterSel = document.getElementById('teamSummaryDateFilter');
+    const dates = [...new Set(bets.map(b => b.date))].sort().reverse();
+    const current = filterSel.value;
+    filterSel.innerHTML = '<option value="">ทุกวัน</option>' + dates.map(d => `<option value="${d}">${d}</option>`).join('');
+    if (dates.includes(current)) filterSel.value = current;
+
+    const selDate = filterSel.value;
+    const byTeam = {};
+    bets.filter(b => !selDate || b.date === selDate).forEach(b => {
+        [...new Set(b.matches.map(m => m.team))].forEach(team => {
+            if (!byTeam[team]) byTeam[team] = { bills: 0, single: 0, step: 0, payout: 0, refund: 0 };
+            byTeam[team].bills++;
+            if (b.betType === 'single') byTeam[team].single += b.stake; else byTeam[team].step += b.stake;
+            if (b.status === 'win') byTeam[team].payout += parseFloat(b.payout) || 0;
+            if (b.status === 'refund') byTeam[team].refund += parseFloat(b.payout) || 0;
+        });
+    });
+
     const tbody = document.getElementById('teamSummaryTableBody');
-    const teamData = getTeamSummaryData(dateFilter);
-    const sortedTeams = Object.keys(teamData).sort((a, b) => (teamData[b].singleStake + teamData[b].stepStake) - (teamData[a].singleStake + teamData[a].stepStake));
-    tbody.innerHTML = '';
-    if (sortedTeams.length === 0) { tbody.innerHTML = `<tr><td colspan="7" style="color:#aaa; padding:20px;">ไม่มีข้อมูล</td></tr>`; return; }
-    sortedTeams.forEach(team => {
-        const data = teamData[team]; const totalStake = data.singleStake + data.stepStake; const profit = totalStake - data.payout;
-        tbody.innerHTML += `<tr><td><b>${team}</b></td><td>${data.billCount}</td><td>${data.singleStake.toFixed(2)}</td><td>${data.stepStake.toFixed(2)}</td><td><b>${totalStake.toFixed(2)}</b></td><td>${data.payout.toFixed(2)}</td><td class="${profit >= 0 ? 'profit' : 'loss'}">${profit.toFixed(2)}</td></tr>`;
-    });
+    tbody.innerHTML = Object.entries(byTeam).sort((a, b) => (b[1].single + b[1].step) - (a[1].single + a[1].step)).map(([team, s]) => {
+        const total = s.single + s.step;
+        const profit = (total - s.refund) - s.payout;
+        return `<tr><td><b>${team}</b></td><td>${s.bills}</td><td>${s.single.toFixed(2)}</td><td>${s.step.toFixed(2)}</td><td>${total.toFixed(2)}</td><td>${s.payout.toFixed(2)}</td><td class="${profit >= 0 ? 'profit' : 'loss'}">${profit >= 0 ? '+' : ''}${profit.toFixed(2)}</td></tr>`;
+    }).join('');
+    if (!tbody.innerHTML) tbody.innerHTML = '<tr><td colspan="7" style="color:#888;">ไม่มีข้อมูล</td></tr>';
 }
 
-// ================ ฟังก์ชัน Excel ================
+function renderPlayerSummary() {
+    const byPlayer = {};
+    bets.forEach(b => {
+        if (!byPlayer[b.player]) byPlayer[b.player] = { stake: 0, payout: 0, refund: 0 };
+        byPlayer[b.player].stake += b.stake;
+        if (b.status === 'win') byPlayer[b.player].payout += parseFloat(b.payout) || 0;
+        if (b.status === 'refund') byPlayer[b.player].refund += parseFloat(b.payout) || 0;
+    });
+    const tbody = document.getElementById('playerSummaryTableBody');
+    tbody.innerHTML = Object.entries(byPlayer).map(([player, s]) => {
+        const profit = (s.stake - s.refund) - s.payout;
+        return `<tr><td><b>${player}</b></td><td>${s.stake.toFixed(2)}</td><td>${s.payout.toFixed(2)}</td><td>${s.refund.toFixed(2)}</td><td class="${profit >= 0 ? 'profit' : 'loss'}">${profit >= 0 ? '+' : ''}${profit.toFixed(2)}</td></tr>`;
+    }).join('');
+    if (!tbody.innerHTML) tbody.innerHTML = '<tr><td colspan="5" style="color:#888;">ไม่มีข้อมูล</td></tr>';
+}
+
+// ============================================================
+// ===== Excel Export / Import =====
+// ============================================================
 function exportToExcel() {
-    if (bets.length === 0) { alert("ไม่มีข้อมให้ส่งออก"); return; }
-    const exportData = bets.map(bet => {
-        let matchesSummary = bet.matches.map(m => { let changed = m.originalTeam ? ` [เปลี่ยนจาก:${m.originalTeam}]` : ''; return `${m.team} (${m.status})${changed}`; }).join(', ');
-        return { "ID": bet.id, "วันที่": bet.date, "เบอร์ลูกค้า": bet.player, "ประเภท": bet.type, "ยอดแทง": bet.stake, "ยอดจ่าย": bet.payout, "สถานะ": bet.status === 'refund' ? 'คืนทุน' : bet.status, "ทีมที่แทง(สรุป)": matchesSummary, "ข้อมูลคู่บอล(JSON)": JSON.stringify(bet.matches) };
-    });
-    const ws = XLSX.utils.json_to_sheet(exportData);
+    if (!bets.length) { alert('ไม่มีข้อมูลสำหรับส่งออก'); return; }
+    const rows = bets.map(b => ({
+        'ID': b.id,
+        'วันที่': b.date,
+        'เบอร์ลูกค้า': b.player,
+        'ประเภท': b.betType,
+        'รายการ': b.type,
+        'ทีมที่แทง': b.matches.map(m => m.team).join(', '),
+        'ยอดแทง': b.stake,
+        'ยอดจ่ายสุทธิ': (b.status === 'win' || b.status === 'refund') ? parseFloat(b.payout) : 0,
+        'สถานะ': BILL_STATUS_TEXT[b.status] || b.status,
+        'รายละเอียดสเต็ป': JSON.stringify(b.matches)
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "ข้อมบิลทั้งหมด");
-    XLSX.writeFile(wb, "FiveM_Bet_Data.xlsx");
-}
-
-function exportSummaryToExcel() {
-    if (bets.length === 0) { alert("ไม่มีข้อมให้ส่งออก"); return; }
-    let totalStake = 0, totalPayout = 0, totalRefund = 0, dailyData = {};
-    bets.forEach(bet => {
-        totalStake += bet.stake;
-        if (bet.status === 'win') totalPayout += parseFloat(bet.payout);
-        if (bet.status === 'refund') totalRefund += parseFloat(bet.payout);
-        if (!dailyData[bet.date]) dailyData[bet.date] = { stake: 0, payout: 0, refund: 0, teams: new Set() };
-        dailyData[bet.date].stake += bet.stake;
-        if (bet.status === 'win') dailyData[bet.date].payout += parseFloat(bet.payout);
-        if (bet.status === 'refund') dailyData[bet.date].refund += parseFloat(bet.payout);
-        bet.matches.forEach(m => { if (m.team && m.team.trim() !== '') dailyData[bet.date].teams.add(m.team); });
-    });
-    const sortedDates = Object.keys(dailyData).sort().reverse();
-    let summaryArray = [];
-    summaryArray.push(["วันที่", "ทีมที่รับแทง", "ยอดรับแทง", "ยอดจ่าย", "ยอดคืนทุน", "กำไร/ขาดทุน"]);
-    sortedDates.forEach(date => {
-        const data = dailyData[date]; const profit = data.stake - data.payout - data.refund;
-        summaryArray.push([date, Array.from(data.teams).join(', '), data.stake.toFixed(2), data.payout.toFixed(2), data.refund.toFixed(2), profit.toFixed(2)]);
-    });
-    summaryArray.push(["", "", "", "", "", "", ""]);
-    const grandProfit = totalStake - totalPayout - totalRefund;
-    summaryArray.push(["รวมทั้งหมด", "", totalStake.toFixed(2), totalPayout.toFixed(2), totalRefund.toFixed(2), grandProfit.toFixed(2)]);
-    const ws = XLSX.utils.aoa_to_sheet(summaryArray);
-    ws['!cols'] = [{ wch: 15 }, { wch: 50 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "สรุปยอดรายวัน");
-    const teamData = getTeamSummaryData("");
-    const sortedTeams = Object.keys(teamData).sort((a, b) => (teamData[b].singleStake + teamData[b].stepStake) - (teamData[a].singleStake + teamData[a].stepStake));
-    let teamArray = [];
-    teamArray.push(["ทีม", "จำนวนบิล", "ยอดแทงเต็ง", "ยอดแทงสเต็ป", "ยอดแทงรวม", "ยอดจ่าย", "กำไร/ขาดทุน"]);
-    sortedTeams.forEach(team => {
-        const data = teamData[team]; const total = data.singleStake + data.stepStake; const profit = total - data.payout;
-        teamArray.push([team, data.billCount, data.singleStake.toFixed(2), data.stepStake.toFixed(2), total.toFixed(2), data.payout.toFixed(2), profit.toFixed(2)]);
-    });
-    const ws2 = XLSX.utils.aoa_to_sheet(teamArray);
-    ws2['!cols'] = [{ wch: 20 }, { wch: 10 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }];
-    XLSX.utils.book_append_sheet(wb, ws2, "สรุปยอดแยกตามทีม");
-    XLSX.writeFile(wb, "FiveM_Bet_Summary.xlsx");
+    XLSX.utils.book_append_sheet(wb, ws, 'บิลทั้งหมด');
+    XLSX.writeFile(wb, `fivem_bets_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
 function importFromExcel(event) {
-    if (!isAdmin()) return;
     const file = event.target.files[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = function(e) {
-        const data = new Uint8Array(e.target.result);
-        const wb = XLSX.read(data, {type: 'array'});
-        const wsName = wb.SheetNames[0];
-        const ws = wb.Sheets[wsName];
-        const json = XLSX.utils.sheet_to_json(ws, {defval: ""});
-        const importedBets = json.map(row => {
-            let matches = [];
-            try { matches = JSON.parse(row["ข้อมูลคู่บอล(JSON)"] || "[]"); } catch(e) { matches = []; }
-            let rawStatus = String(row["สถานะ"] || "pending");
-            let status = rawStatus === 'คืนทุน' ? 'refund' : rawStatus;
-            return {
-                id: row["ID"] || Date.now(), date: row["วันที่"] || "", player: row["เบอร์ลูกค้า"] || "",
-                betType: String(row["ประเภท"]).includes('สเต็ป') ? 'step' : 'single', type: row["ประเภท"] || "",
-                stake: parseFloat(row["ยอดแทง"]) || 0, payout: parseFloat(row["ยอดจ่าย"]) || 0,
-                status: status, matches: matches, team: matches[0]?.team || ""
-            };
-        });
-        if (confirm("คุณต้องการโหลดข้อมจาก Excel และทับข้อมูลปัจจุบันในเว็บใช่ไหม?")) {
-            bets = importedBets; saveData(); renderTable(); alert("โหลดข้อมูลสำเร็จ!");
-        }
+        try {
+            const wb = XLSX.read(e.target.result, { type: 'array' });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const rows = XLSX.utils.sheet_to_json(ws);
+            let count = 0;
+            rows.forEach((r, i) => {
+                let matches;
+                try { matches = JSON.parse(r['รายละเอียดสเต็ป'] || '[]'); } catch (err) { matches = []; }
+                const status = THAI_TO_STATUS[r['สถานะ']] || 'pending';
+                if (!matches.length) {
+                    matches = [{ match: 'บอลเต็ง', team: String(r['ทีมที่แทง'] || ''), status }];
+                }
+                const betType = r['ประเภท'] === 'step' ? 'step' : 'single';
+                const newBet = {
+                    id: r['ID'] ? Number(r['ID']) : Date.now() + i,
+                    date: String(r['วันที่'] || ''),
+                    player: String(r['เบอร์ลูกค้า'] || ''),
+                    betType: betType,
+                    stake: Number(r['ยอดแทง'] || 0),
+                    status: status,
+                    payout: Number(r['ยอดจ่ายสุทธิ'] || 0),
+                    type: r['รายการ'] || (betType === 'single' ? 'เต็ง' : `สเต็ป ${matches.length} คู่`),
+                    matches: matches
+                };
+                if (newBet.date && newBet.player && !bets.some(b => b.id === newBet.id)) { bets.push(newBet); count++; }
+            });
+            saveData(); renderTable();
+            alert(`นำเข้าสำเร็จ ${count} รายการ`);
+        } catch (err) { alert('ไฟล์ไม่ถูกต้อง: ' + err.message); }
     };
     reader.readAsArrayBuffer(file);
-    event.target.value = "";
+    event.target.value = '';
 }
 
-// ================ ฟังก์ชันหลักแสดงผล ================
-function renderTable() {
-    const tableBody = document.getElementById('betTableBody');
-    tableBody.innerHTML = '';
-
-    let totalStake = 0, totalPayout = 0, totalRefund = 0, dailyData = {}, playerData = {};
-
-    bets.forEach(bet => {
-        totalStake += bet.stake;
-        if (bet.status === 'win') totalPayout += parseFloat(bet.payout);
-        if (bet.status === 'refund') totalRefund += parseFloat(bet.payout);
-        if (!dailyData[bet.date]) dailyData[bet.date] = { stake: 0, payout: 0, refund: 0, teams: new Set() };
-        dailyData[bet.date].stake += bet.stake;
-        if (bet.status === 'win') dailyData[bet.date].payout += parseFloat(bet.payout);
-        if (bet.status === 'refund') dailyData[bet.date].refund += parseFloat(bet.payout);
-        bet.matches.forEach(m => { if (m.team && m.team.trim() !== '') dailyData[bet.date].teams.add(m.team); });
-        if (!playerData[bet.player]) playerData[bet.player] = { stake: 0, payout: 0, refund: 0 };
-        playerData[bet.player].stake += bet.stake;
-        if (bet.status === 'win') playerData[bet.player].payout += parseFloat(bet.payout);
-        if (bet.status === 'refund') playerData[bet.player].refund += parseFloat(bet.payout);
-    });
-
-    const filteredBets = bets.filter(bet => {
-        const matchesSearch = currentSearch === "" || bet.player.toLowerCase().includes(currentSearch) || (bet.team && bet.team.toLowerCase().includes(currentSearch)) || bet.matches.some(m => m.team.toLowerCase().includes(currentSearch) || m.match.toLowerCase().includes(currentSearch));
-        const matchesStatus = currentStatusFilter === "" || bet.status === currentStatusFilter;
-        const matchesDate = currentDateFilter === "" || bet.date === currentDateFilter;
-        return matchesSearch && matchesStatus && matchesDate;
-    });
-
-    const statusOrder = { 'pending': 1, 'win': 2, 'refund': 3, 'lose': 4 };
-    const sortedBets = [...filteredBets].sort((a, b) => {
-        const orderA = statusOrder[a.status] || 5, orderB = statusOrder[b.status] || 5;
-        if (orderA !== orderB) return orderA - orderB;
-        return b.id - a.id;
-    });
-
-    if (sortedBets.length === 0) {
-        tableBody.innerHTML = `<tr><td colspan="${isAdmin() ? 7 : 6}" style="color:#aaa; padding:20px;">ไม่พบข้อมูลที่ค้นหา</td></tr>`;
-    } else {
-        sortedBets.forEach(bet => {
-            let statusText = '';
-            if (bet.status === 'pending') statusText = '<span class="status-pending">รอผล</span>';
-            else if (bet.status === 'win') statusText = '<span class="status-win">ได้</span>';
-            else if (bet.status === 'refund') statusText = '<span class="status-refund">คืนทุน</span>';
-            else if (bet.status === 'lose') statusText = '<span class="status-lose">เสีย</span>';
-
-            let hasChanged = bet.matches.some(m => m.originalTeam);
-
-            let matchesHtml = '<div class="matches-display">';
-            bet.matches.forEach((m, index) => {
-                let changedBadge = m.originalTeam ? `<span class="changed-badge">🔄 เปลี่ยนจาก ${m.originalTeam}</span>` : '';
-                let rowStyle = m.originalTeam ? 'background:rgba(255,152,0,0.08); border-radius:4px; padding:5px;' : '';
-                if (m.status === 'refund') rowStyle += 'border-left:3px solid #29b6f6; padding-left:8px;';
-                let dis = isAdmin() ? '' : 'disabled';
-                matchesHtml += `<div class="match-row" style="${rowStyle}"><span><b>${m.match}</b> (แทง: ${m.team}) ${changedBadge}</span><select ${dis} onchange="updateMatchStatus(${bet.id}, ${index}, this.value)"><option value="pending" ${m.status=='pending'?'selected':''}>รอผล</option><option value="win" ${m.status=='win'?'selected':''}>ได้</option><option value="half_win" ${m.status=='half_win'?'selected':''}>ได้ครึ่ง</option><option value="half_loss" ${m.status=='half_loss'?'selected':''}>เสียครึ่ง</option><option value="refund" ${m.status=='refund'?'selected':''}>คืนทุน</option><option value="lose" ${m.status=='lose'?'selected':''}>เสีย</option></select></div>`;
-            });
-            matchesHtml += '</div>';
-
-            let payDisplay = '-';
-            if (bet.status === 'win') payDisplay = bet.payout;
-            else if (bet.status === 'refund') payDisplay = `<span style="color:#29b6f6;">${bet.payout}</span>`;
-
-            let actionTd = '';
-            if (isAdmin()) {
-                actionTd = `<td><div class="action-btns"><button class="change-team-btn" onclick="openChangeTeamModal(${bet.id})">${hasChanged?'🔄เปลี่ยนทีม':'เปลี่ยนทีม'}</button><button class="edit-btn" onclick="editBet(${bet.id})">แก้ไข</button><button class="duplicate-btn" onclick="duplicateBet(${bet.id})">คัดลอก</button><button class="slip-btn" onclick="copySlip(${bet.id})">สลิป</button><button class="danger" onclick="deleteBet(${bet.id})">ลบ</button></div></td>`;
-            }
-
-            tableBody.innerHTML += `<tr><td>${bet.date}</td><td>${bet.player}</td><td>${bet.type} ${matchesHtml}</td><td>${bet.stake.toFixed(2)}</td><td>${payDisplay}</td><td>${statusText}</td>${actionTd}</tr>`;
-        });
-    }
-
-    // แดชบอร์ด
-    document.getElementById('totalStake').innerText = totalStake.toFixed(2);
-    document.getElementById('totalPayout').innerText = totalPayout.toFixed(2);
-    document.getElementById('totalRefund').innerText = totalRefund.toFixed(2);
-    const netProfit = totalStake - totalPayout - totalRefund;
-    const profitEl = document.getElementById('totalProfit');
-    profitEl.innerText = netProfit.toFixed(2);
-    profitEl.className = 'num ' + (netProfit >= 0 ? 'profit' : 'loss');
-
-    // สรุปรายวัน
-    const dailyBody = document.getElementById('dailyTableBody');
-    dailyBody.innerHTML = '';
-    const sortedDates = Object.keys(dailyData).sort().reverse();
-    sortedDates.forEach(date => {
-        const data = dailyData[date];
-        const dailyProfit = data.stake - data.payout - data.refund;
-        dailyBody.innerHTML += `<tr><td>${date}</td><td><div class="teams-list">${Array.from(data.teams).join(', ')}</div></td><td>${data.stake.toFixed(2)}</td><td>${data.payout.toFixed(2)}</td><td style="color:#29b6f6;">${data.refund.toFixed(2)}</td><td class="${dailyProfit >= 0 ? 'profit' : 'loss'}">${dailyProfit.toFixed(2)}</td></tr>`;
-    });
-    if (sortedDates.length === 0) dailyBody.innerHTML = `<tr><td colspan="6" style="color:#aaa; padding:20px;">ไม่มีข้อมูล</td></tr>`;
-
-    // สรุปตามบุคคล
-    const playerBody = document.getElementById('playerSummaryTableBody');
-    playerBody.innerHTML = '';
-    const sortedPlayers = Object.keys(playerData).sort((a, b) => playerData[b].stake - playerData[a].stake);
-    sortedPlayers.forEach(player => {
-        const data = playerData[player];
-        const playerProfit = data.stake - data.payout - data.refund;
-        playerBody.innerHTML += `<tr><td><b>${player}</b></td><td>${data.stake.toFixed(2)}</td><td>${data.payout.toFixed(2)}</td><td style="color:#29b6f6;">${data.refund.toFixed(2)}</td><td class="${playerProfit >= 0 ? 'profit' : 'loss'}">${playerProfit.toFixed(2)}</td></tr>`;
-    });
-    if (sortedPlayers.length === 0) playerBody.innerHTML = `<tr><td colspan="5" style="color:#aaa; padding:20px;">ไม่มีข้อมูล</td></tr>`;
-
-    updatePlayerDatalist();
-    updateTeamSummaryDateOptions();
-    renderTeamSummary();
+function exportSummaryToExcel() {
+    const stats = getDailyStats();
+    if (!stats.length) { alert('ไม่มีข้อมูลสำหรับส่งออก'); return; }
+    const rows = stats.map(d => ({
+        'วันที่': d.date,
+        'ทีมที่รับแทง (ฝั่งตรงข้าม)': d.teams,
+        'ยอดรับแทง': d.stake,
+        'ยอดจ่าย': d.payout,
+        'ยอดคืนทุน': d.refund,
+        'กำไร/ขาดทุน': d.profit
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'สรุปประจำวัน');
+    XLSX.writeFile(wb, `fivem_summary_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
-// ===== เริ่มต้น =====
-initUsers();
-if (checkSession()) {
-    showMainApp();
-} else {
-    document.getElementById('loginScreen').style.display = 'flex';
-    document.getElementById('mainApp').style.display = 'none';
-}
+// ============================================================
+// ===== 🚀 เริ่มระบบ: โหลดจากคลาวด์ก่อนแล้วค่อยเช็ค session =====
+// ============================================================
+(async function startup() {
+    await loadAllFromCloud();
+    await migrateLocalToCloud();
+    if (checkSession()) showMainApp();
+})();
 </script>
 </body>
 </html>

@@ -370,6 +370,11 @@ create policy "open_users" on fivem_users for all to anon, authenticated using (
             <div><label>ทีมเต็ง 2</label><br><input type="text" id="masterTeam2" placeholder="เช่น อาร์เซนอล" style="width: 150px;"></div>
             <button onclick="addMasterMatch()">เพิ่มคู่บอล</button>
         </div>
+        <div style="margin-top:15px; text-align:center; padding:12px; background:#1a1d24; border-radius:8px; border:1px dashed #3a3f4b;">
+            <button class="excel-btn" onclick="fetchMatchesFromAPI()" id="fetchApiBtn">📥 ดึงคู่บอลวันนี้จาก API (ทุกลีกหลัก)</button>
+            <span id="fetchStatus" style="color:#ff9800; font-size:12px; margin-left:10px;"></span>
+            <p class="note-text" style="margin-top:8px; margin-bottom:0;">* กดปุ่มแล้วรอ 5-15 วินาที (ดึง 16 ลีก) | ต้องเลือกวันที่ก่อนกด</p>
+        </div>
         <table style="margin-top: 15px;">
             <thead><tr><th>วันที่</th><th>เวลา</th><th>คู่บอล</th><th>สถานะ</th><th>จัดการ</th></tr></thead>
             <tbody id="masterMatchTableBody"></tbody>
@@ -823,6 +828,113 @@ function saveSettings() {
 }
 
 // ============================================================
+// ===== 📥 ดึงคู่บอลจาก TheSportsDB API (ทุกลีกหลัก) =====
+// ============================================================
+const THE_SPORTS_DB_KEY = '3'; // Public test key — สมัครฟรีที่ thesportsdb.com ถ้าโดนจำกัด
+const MAJOR_LEAGUES = [
+    'English Premier League',
+    'Spanish La Liga',
+    'Italian Serie A',
+    'German Bundesliga',
+    'French Ligue 1',
+    'Thai Premier League',
+    'Thai League 1',
+    'UEFA Champions League',
+    'UEFA Europa League',
+    'UEFA Europa Conference League',
+    'Dutch Eredivisie',
+    'Portuguese Primeira Liga',
+    'Scottish Premier League',
+    'Turkish Super Lig',
+    'Belgian First Division A',
+    'English League Championship'
+];
+
+async function fetchMatchesFromAPI() {
+    if (!isAdmin()) return;
+    const dateInput = document.getElementById('masterDate').value;
+    if (!dateInput) { alert('กรุณาเลือกวันที่แข่งก่อน (ช่อง "วันที่แข่ง")'); return; }
+    
+    const btn = document.getElementById('fetchApiBtn');
+    const status = document.getElementById('fetchStatus');
+    btn.disabled = true;
+    btn.style.opacity = '0.5';
+    btn.innerText = '⏳ กำลังดึง...';
+    
+    let added = 0;
+    let skipped = 0;
+    let leagueFound = 0;
+    let errors = 0;
+    
+    for (let i = 0; i < MAJOR_LEAGUES.length; i++) {
+        const league = MAJOR_LEAGUES[i];
+        status.innerText = `กำลังดึง... (${i+1}/${MAJOR_LEAGUES.length}) ${league}`;
+        
+        try {
+            const url = `https://www.thesportsdb.com/api/v1/json/${THE_SPORTS_DB_KEY}/eventsday.php?d=${dateInput}&l=${encodeURIComponent(league)}`;
+            const res = await fetch(url);
+            if (!res.ok) { console.error('HTTP', res.status, league); errors++; continue; }
+            
+            const data = await res.json();
+            if (!data || !data.events) continue;
+            
+            leagueFound++;
+            
+            for (const ev of data.events) {
+                const home = (ev.strHomeTeam || '').trim();
+                const away = (ev.strAwayTeam || '').trim();
+                if (!home || !away || home === 'TBD' || away === 'TBD' || home === 'To Be Determined' || away === 'To Be Determined') continue;
+                
+                const exists = matchesMasterList.some(m => 
+                    m.date === dateInput && 
+                    ((m.teams[0] === home && m.teams[1] === away) || (m.teams[0] === away && m.teams[1] === home))
+                );
+                if (exists) { skipped++; continue; }
+                
+                let time = '00:00';
+                if (ev.strTimestamp) {
+                    const d = new Date(parseInt(ev.strTimestamp) * 1000);
+                    if (!isNaN(d.getTime())) {
+                        time = d.toLocaleTimeString('en-GB', { 
+                            hour: '2-digit', 
+                            minute: '2-digit', 
+                            timeZone: 'Asia/Bangkok',
+                            hour12: false 
+                        });
+                    }
+                } else if (ev.strTime) {
+                    time = ev.strTime.substring(0, 5);
+                }
+                
+                matchesMasterList.push({
+                    id: Date.now() + Math.floor(Math.random() * 1000000),
+                    date: dateInput,
+                    time: time,
+                    name: `${home}-${away}`,
+                    teams: [home, away],
+                    locked: false
+                });
+                added++;
+            }
+        } catch (e) { 
+            console.error('fetch error', league, e); 
+            errors++;
+        }
+    }
+    
+    saveMatches();
+    renderMasterMatches();
+    updateBetFormDropdowns();
+    
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    btn.innerText = '📥 ดึงคู่บอลวันนี้จาก API (ทุกลีกหลัก)';
+    status.innerText = '';
+    
+    alert(`✅ ดึงเสร็จเรียบร้อย\n\n📅 วันที่: ${dateInput}\n🆕 เพิ่มใหม่: ${added} คู่\n⏭️ มีอยู่แล้ว (ข้าม): ${skipped} คู่\n⚽ พบใน ${leagueFound}/${MAJOR_LEAGUES.length} ลีก${errors ? `\n⚠️ ผิดพลาด ${errors} ลีก` : ''}`);
+}
+
+// ============================================================
 // ===== จัดการคู่บอลประจำวัน =====
 // ============================================================
 function addMasterMatch() {
@@ -1006,7 +1118,7 @@ function updateMatchStatus(betId, matchIndex, newStatus) {
 
 function calculatePayout(type, stake, matches, bet) {
     const winOdds = (bet && bet.winOdds) ? bet.winOdds : settings.winOdds;
-    const halfWinOdds = winOdds - 0.4; // ได้ครึ่ง = เต็ม - 0.4 (เช่น 1.8→1.4, 1.9→1.5)
+    const halfWinOdds = winOdds - 0.4;
     let totalMultiplier = 1, halfLossCount = 0, isLose = false, isPending = false, refundCount = 0;
     matches.forEach(m => {
         if (m.status === 'pending') isPending = true;

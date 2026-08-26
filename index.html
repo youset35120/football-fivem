@@ -356,7 +356,7 @@ create policy "open_users" on fivem_users for all to anon, authenticated using (
             <div><label>จ่ายสูงสุด (สเต็ป)</label><br><input type="number" id="maxPayoutInput" step="1000" value="0" style="width: 120px;"></div>
             <div><br><button onclick="saveSettings()">บันทึกการตั้งค่า</button></div>
         </div>
-        <p class="note-text">* ใส่ 0 หากไม่ต้องการกำหนดยอดจำกัด</p>
+        <p class="note-text">* ใส่ 0 หากไม่ต้องการกำหนดยอดจำกัด | * ค่าน้ำเฉพาะบิลตั้งได้ที่ปุ่ม 💰แก้ยอด ในตาราง</p>
     </div>
 
     <!-- จัดการคู่บอลประจำวัน -->
@@ -397,6 +397,7 @@ create policy "open_users" on fivem_users for all to anon, authenticated using (
             <div><label>ประเภท</label><br><select id="betType" onchange="toggleStepMenu()"><option value="single">บอลเต็ง</option><option value="step">บอลสเต็ป</option></select></div>
             <div id="singleTeamWrapper"><label>ทีมที่แทง (เต็ง)</label><br><select id="singleTeam"><option value="">-- กรุณาเพิ่มคู่บอล --</option></select></div>
             <div><label>ยอดแทง</label><br><input type="number" id="stake" placeholder="เช่น 100"></div>
+            <div><label>ค่าน้ำบิลนี้</label><br><select id="betOdds"><option value="">ใช้ค่าทั่วไป</option><option value="1.9">1.9</option><option value="1.85">1.85</option><option value="1.8">1.8</option><option value="1.7">1.7</option><option value="1.6">1.6</option></select></div>
             <div><br><button id="submitBtn" onclick="submitBet()">เพิ่มรายการ</button><button class="danger" id="cancelBtn" style="display:none;" onclick="cancelEdit()">ยกเลิก</button></div>
         </div>
         <div id="stepMatchesWrapper" style="display:none;">
@@ -504,12 +505,35 @@ create policy "open_users" on fivem_users for all to anon, authenticated using (
     </div>
 </div>
 
+<!-- Modal แก้ยอดแทง/ค่าน้ำ -->
+<div class="modal-overlay" id="editStakeModal">
+    <div class="modal-content">
+        <h2>💰 แก้ไขยอดแทง / ค่าน้ำบิลนี้</h2>
+        <p style="font-size:13px; color:#aaa; margin-bottom:15px;" id="editStakeInfo"></p>
+        <label>ยอดแทง</label><br>
+        <input type="number" id="editStakeInput" step="0.01" style="width:100%; margin-bottom:12px; box-sizing:border-box;">
+        <label>ค่าน้ำบิลนี้</label><br>
+        <select id="editOddsInput" style="width:100%; margin-bottom:12px; box-sizing:border-box;">
+            <option value="">ใช้ค่าทั่วไป (ตามตั้งค่าระบบ)</option>
+            <option value="1.9">1.9</option>
+            <option value="1.85">1.85</option>
+            <option value="1.8">1.8</option>
+            <option value="1.7">1.7</option>
+            <option value="1.6">1.6</option>
+        </select>
+        <div class="modal-actions">
+            <button onclick="confirmEditStake()">บันทึก</button>
+            <button class="danger" onclick="document.getElementById('editStakeModal').style.display='none'">ยกเลิก</button>
+        </div>
+    </div>
+</div>
+
 <script>
 // ============================================================
-// ===== 🌩️ SUPABASE : เปลี่ยน 2 ค่านี้เป็นของคุณ! (Settings → API) =====
+// ===== 🌩️ SUPABASE (ใส่ค่าของคุณไว้แล้ว) =====
 // ============================================================
 const SUPABASE_URL = 'https://kpwpebazqxqezwqqnnub.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtwd3BlYmF6cXhxZXp3cXFubnViIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc1MDc4NzksImV4cCI6MjEwMzA4Mzg3OX0.z7SYhrO-2L01XzROu1_xVJ1LsE7cmLB2JpxT6P37yxU';                  // 🔴 เปลี่ยนตรงนี้
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtwd3BlYmF6cXhxZXp3cXFubnViIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc1MDc4NzksImV4cCI6MjEwMzA4Mzg3OX0.z7SYhrO-2L01XzROu1_xVJ1LsE7cmLB2JpxT6P37yxU';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ============================================================
@@ -522,9 +546,9 @@ let currentUser = null;
 let sessionTimer = null;
 let lastActivity = Date.now();
 
-let cloudUsers = []; // ผู้ใช้ทั้งหมดจาก Supabase
+let cloudUsers = [];
 
-function initUsers() { /* ใช้คลาวด์แล้ว จัดการใน loadAllFromCloud */ }
+function initUsers() { /* ใช้คลาวด์แล้ว */ }
 function getUsers() { return cloudUsers; }
 function saveUsers(u) { cloudUsers = u; syncUsers(); }
 function isAdmin() { return currentUser && currentUser.role === 'admin'; }
@@ -679,6 +703,7 @@ let currentSearch = "";
 let currentStatusFilter = "";
 let currentDateFilter = "";
 let changeTeamBetId = null;
+let editingStakeBetId = null;
 
 // ============================================================
 // ===== 🌩️ SUPABASE SYNC (ข้อมูลรวมกลาง ทุกเครื่องเห็นเหมือนกัน) =====
@@ -922,7 +947,9 @@ function submitBet() {
     if (betType === 'single' && settings.maxSingle > 0 && stake > settings.maxSingle) { alert(`ยอดแทงบอลเต็งเกินกำหนด (สูงสุด ${settings.maxSingle})`); return; }
     if (betType === 'step' && settings.maxStep > 0 && stake > settings.maxStep) { alert(`ยอดแทงบอลสเต็ปเกินกำหนด (สูงสุด ${settings.maxStep})`); return; }
 
+    const betOddsVal = document.getElementById('betOdds').value;
     let newBet = { id: editId ? parseInt(editId) : Date.now(), date, player: playerName, betType, stake, status: 'pending', payout: 0 };
+    if (betOddsVal) newBet.winOdds = parseFloat(betOddsVal);
 
     if (betType === 'single') {
         newBet.type = 'เต็ง';
@@ -934,7 +961,8 @@ function submitBet() {
         newBet.type = `สเต็ป ${currentMatches.length} คู่`;
         newBet.matches = JSON.parse(JSON.stringify(currentMatches));
         if (settings.maxPayout > 0) {
-            let potentialPayout = stake * Math.pow(settings.winOdds, currentMatches.length);
+            const effectiveOdds = newBet.winOdds || settings.winOdds;
+            let potentialPayout = stake * Math.pow(effectiveOdds, currentMatches.length);
             if (potentialPayout > settings.maxPayout) { alert(`ยอดจ่ายสูงสุดเกินกำหนด! ยอดจ่าย: ${potentialPayout.toFixed(2)} (สูงสุด ${settings.maxPayout})`); return; }
         }
     }
@@ -961,7 +989,7 @@ function submitBet() {
 
     if (editId) {
         const updatedBet = bets.find(b => b.id == editId);
-        if (updatedBet) { const result = calculatePayout(updatedBet.betType, updatedBet.stake, updatedBet.matches); updatedBet.payout = result.payout; updatedBet.status = result.status; }
+        if (updatedBet) { const result = calculatePayout(updatedBet.betType, updatedBet.stake, updatedBet.matches, updatedBet); updatedBet.payout = result.payout; updatedBet.status = result.status; }
     }
     saveData(); renderTable(); cancelEdit();
 }
@@ -971,17 +999,19 @@ function updateMatchStatus(betId, matchIndex, newStatus) {
     const bet = bets.find(b => b.id === betId);
     if (!bet) return;
     bet.matches[matchIndex].status = newStatus;
-    const result = calculatePayout(bet.betType, bet.stake, bet.matches);
+    const result = calculatePayout(bet.betType, bet.stake, bet.matches, bet);
     bet.payout = result.payout; bet.status = result.status;
     saveData(); renderTable();
 }
 
-function calculatePayout(type, stake, matches) {
+function calculatePayout(type, stake, matches, bet) {
+    const winOdds = (bet && bet.winOdds) ? bet.winOdds : settings.winOdds;
+    const halfWinOdds = winOdds - 0.4; // ได้ครึ่ง = เต็ม - 0.4 (เช่น 1.8→1.4, 1.9→1.5)
     let totalMultiplier = 1, halfLossCount = 0, isLose = false, isPending = false, refundCount = 0;
     matches.forEach(m => {
         if (m.status === 'pending') isPending = true;
-        else if (m.status === 'win') totalMultiplier *= settings.winOdds;
-        else if (m.status === 'half_win') totalMultiplier *= settings.halfWinOdds;
+        else if (m.status === 'win') totalMultiplier *= winOdds;
+        else if (m.status === 'half_win') totalMultiplier *= halfWinOdds;
         else if (m.status === 'half_loss') halfLossCount++;
         else if (m.status === 'refund') { totalMultiplier *= 1; refundCount++; }
         else if (m.status === 'lose') isLose = true;
@@ -1043,7 +1073,7 @@ function confirmChangeTeam() {
     });
     if (anyChanged) {
         if (bet.betType === 'single' && bet.matches[0]) bet.team = bet.matches[0].team;
-        const result = calculatePayout(bet.betType, bet.stake, bet.matches);
+        const result = calculatePayout(bet.betType, bet.stake, bet.matches, bet);
         bet.payout = result.payout; bet.status = result.status;
         saveData(); renderTable(); alert('✅ เปลี่ยนทีมเรียบร้อยแล้ว!');
     } else { alert('ไม่มีการเปลี่ยนแปลงทีม'); }
@@ -1052,6 +1082,36 @@ function confirmChangeTeam() {
 
 function closeChangeTeamModal() { changeTeamBetId = null; document.getElementById('changeTeamModal').style.display = 'none'; }
 document.getElementById('changeTeamModal').addEventListener('click', function(e) { if (e.target === this) closeChangeTeamModal(); });
+
+// ============================================================
+// ===== 💰 แก้ยอดแทง / ค่าน้ำเฉพาะบิล =====
+// ============================================================
+function editStake(id) {
+    if (!isAdmin()) return;
+    const bet = bets.find(b => b.id === id);
+    if (!bet) return;
+    editingStakeBetId = id;
+    document.getElementById('editStakeInfo').innerText = `${bet.date} | ${bet.player} | ${bet.type}`;
+    document.getElementById('editStakeInput').value = bet.stake;
+    document.getElementById('editOddsInput').value = bet.winOdds || '';
+    document.getElementById('editStakeModal').style.display = 'flex';
+}
+
+function confirmEditStake() {
+    const bet = bets.find(b => b.id === editingStakeBetId);
+    if (!bet) return;
+    const newStake = parseFloat(document.getElementById('editStakeInput').value);
+    const newOdds = document.getElementById('editOddsInput').value;
+    if (!newStake || newStake <= 0) { alert('กรุณาใส่ยอดแทงที่ถูกต้อง'); return; }
+    bet.stake = newStake;
+    if (newOdds) bet.winOdds = parseFloat(newOdds);
+    else delete bet.winOdds;
+    const result = calculatePayout(bet.betType, bet.stake, bet.matches, bet);
+    bet.payout = result.payout; bet.status = result.status;
+    saveData(); renderTable();
+    document.getElementById('editStakeModal').style.display = 'none';
+}
+document.getElementById('editStakeModal').addEventListener('click', function(e) { if (e.target === this) this.style.display = 'none'; });
 
 // ============================================================
 // ===== แก้ไข / คัดลอก / สลิป / ลบ =====
@@ -1066,6 +1126,7 @@ function editBet(id) {
     document.getElementById('playerName').value = bet.player;
     document.getElementById('stake').value = bet.stake;
     document.getElementById('betType').value = bet.betType;
+    document.getElementById('betOdds').value = bet.winOdds || '';
     toggleStepMenu();
     if (bet.betType === 'single') { ensureSingleTeamOption(bet.team); document.getElementById('singleTeam').value = bet.team || ''; }
     else { currentMatches = JSON.parse(JSON.stringify(bet.matches)); renderMatchList(); }
@@ -1084,6 +1145,7 @@ function duplicateBet(id) {
     document.getElementById('playerName').value = bet.player;
     document.getElementById('stake').value = bet.stake;
     document.getElementById('betType').value = bet.betType;
+    document.getElementById('betOdds').value = bet.winOdds || '';
     toggleStepMenu();
     if (bet.betType === 'single') { ensureSingleTeamOption(bet.team); document.getElementById('singleTeam').value = bet.team || ''; }
     else { currentMatches = JSON.parse(JSON.stringify(bet.matches)).map(m => ({...m, status: 'pending'})); renderMatchList(); }
@@ -1118,6 +1180,7 @@ function cancelEdit() {
     document.getElementById('stake').value = '';
     document.getElementById('singleTeam').value = '';
     document.getElementById('betType').value = 'single';
+    document.getElementById('betOdds').value = '';
     document.getElementById('betDate').valueAsDate = new Date();
     currentMatches = []; renderMatchList(); toggleStepMenu();
     document.getElementById('formTitle').innerText = '📝 เพิ่มรายการแทงใหม่';
@@ -1193,12 +1256,14 @@ function renderTable() {
 
         const payoutText = (b.status === 'win' || b.status === 'refund') ? Number(b.payout).toFixed(2) : '-';
         const statusCell = `<span class="status-${b.status}">${BILL_STATUS_TEXT[b.status] || b.status}</span>`;
+        const oddsBadge = b.winOdds ? `<div style="color:#ff9800; font-size:11px; margin-top:4px;">💧 น้ำ ${b.winOdds}</div>` : '';
         const actionCell = isAdmin() ? `<div class="action-btns">
             <button class="edit-btn" onclick="editBet(${b.id})">แก้ไข</button>
             <button class="duplicate-btn" onclick="duplicateBet(${b.id})">คัดลอก</button>
             <button class="slip-btn" onclick="copySlip(${b.id})">สลิป</button>
             <button class="change-team-btn" onclick="openChangeTeamModal(${b.id})">🔄</button>
-            <button class="danger" onclick="deleteBet(${b.id})">ลบ</button></div>` : '';
+            <button class="lock-btn" onclick="editStake(${b.id})">💰แก้ยอด</button>
+            <button class="danger" onclick="deleteBet(${b.id})">ลบ</button></div>${oddsBadge}` : oddsBadge;
 
         tbody.innerHTML += `<tr>
             <td>${b.date}</td><td>${b.player}</td>

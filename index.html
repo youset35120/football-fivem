@@ -14,6 +14,7 @@ create table fivem_bets (id text primary key, data jsonb not null);
 create table fivem_matches (id text primary key, data jsonb not null);
 create table fivem_settings (id text primary key, data jsonb not null);
 create table fivem_users (id text primary key, data jsonb not null);
+create table fivem_customers (id text primary key, data jsonb not null);
 
 alter table fivem_bets enable row level security;
 alter table fivem_matches enable row level security;
@@ -23,7 +24,7 @@ alter table fivem_users enable row level security;
 create policy "open_bets" on fivem_bets for all to anon, authenticated using (true) with check (true);
 create policy "open_matches" on fivem_matches for all to anon, authenticated using (true) with check (true);
 create policy "open_settings" on fivem_settings for all to anon, authenticated using (true) with check (true);
-create policy "open_users" on fivem_users for all to anon, authenticated using (true) with check (true);
+create policy "open_customers" on fivem_customers for all to anon, authenticated using (true) with check (true);
 ═══════════════════════════════════════════════════════════
 -->
     <style>
@@ -318,6 +319,7 @@ create policy "open_users" on fivem_users for all to anon, authenticated using (
         </div>
         <div class="user-actions">
             <button class="user-mgmt-btn viewer-hide" onclick="toggleUserMgmt()">👥 จัดการผู้ใช้</button>
+            <button class="user-mgmt-btn viewer-hide" onclick="toggleCustomerMgmt()">🧑 จัดการลูกค้า</button>
             <button onclick="showChangePassword()">🔑 เปลี่ยนรหัส</button>
             <button class="logout-btn" onclick="doLogout()">🚪 ออกจากระบบ</button>
         </div>
@@ -346,18 +348,23 @@ create policy "open_users" on fivem_users for all to anon, authenticated using (
     </div>
 
     <!-- กล่องตั้งค่าค่าน้ำและยอดจำกัด -->
-    <div class="card viewer-hide">
-        <h2>⚙️ ตั้งค่าระบบ (ค่าน้ำ / จำกัดยอด)</h2>
-        <div class="settings-box">
-            <div><label>ราคาได้เต็ม</label><br><input type="number" id="winOddsInput" step="0.01" value="1.8" style="width: 80px;"></div>
-            <div><label>ราคาได้ครึ่ง</label><br><input type="number" id="halfWinOddsInput" step="0.01" value="1.4" style="width: 80px;"></div>
-            <div><label>แทงสูงสุด (เต็ง)</label><br><input type="number" id="maxSingleInput" step="100" value="0" style="width: 100px;"></div>
-            <div><label>แทงสูงสุด (สเต็ป)</label><br><input type="number" id="maxStepInput" step="100" value="0" style="width: 100px;"></div>
-            <div><label>จ่ายสูงสุด (สเต็ป)</label><br><input type="number" id="maxPayoutInput" step="1000" value="0" style="width: 120px;"></div>
-            <div><br><button onclick="saveSettings()">บันทึกการตั้งค่า</button></div>
+    <!-- จัดการลูกค้า -->
+    <div class="card" id="customerMgmtCard" style="display:none;">
+        <h2>🧑 จัดการลูกค้า</h2>
+        <div class="user-mgmt-form">
+            <div><label>เบอร์โทร</label><br><input type="text" id="newCustPhone" placeholder="0812345678" style="width:150px;"></div>
+            <div><label>ชื่อลูกค้า</label><br><input type="text" id="newCustName" placeholder="สมชาย" style="width:150px;"></div>
+            <div><label>หมายเหตุ</label><br><input type="text" id="newCustNotes" placeholder="ลูกค้าประจำ..." style="width:200px;"></div>
+            <button onclick="addCustomer()">เพิ่มลูกค้า</button>
         </div>
-        <p class="note-text">* ใส่ 0 หากไม่ต้องการกำหนดยอดจำกัด | * ค่าน้ำเฉพาะบิลตั้งได้ที่ปุ่ม 💰แก้ยอด ในตาราง</p>
+        <table style="margin-top: 15px;">
+            <thead><tr><th>เบอร์โทร</th><th>ชื่อ</th><th>หมายเหตุ</th><th>จำนวนบิล</th><th>ยอดแทงรวม</th><th>จัดการ</th></tr></thead>
+            <tbody id="customerTableBody"></tbody>
+        </table>
+        <p class="note-text">* เบอร์โทรใช้เป็นรหัสลูกค้า — ใส่เบอร์เดียวกันในบิล ระบบจะจับคู่ให้อัตโนมัติ | บิลเก่าระบบสร้างลูกค้าให้อัตโนมัติ</p>
     </div>
+
+
 
     <!-- จัดการคู่บอลประจำวัน -->
     <div class="card viewer-hide">
@@ -371,12 +378,12 @@ create policy "open_users" on fivem_users for all to anon, authenticated using (
             <button onclick="addMasterMatch()">เพิ่มคู่บอล</button>
         </div>
         <div style="margin-top:15px; text-align:center; padding:12px; background:#1a1d24; border-radius:8px; border:1px dashed #3a3f4b;">
-            <button class="excel-btn" onclick="fetchMatchesFromAPI()" id="fetchApiBtn">📥 ดึงคู่บอลวันนี้จาก API (ทุกลีกหลัก)</button>
+            <button class="excel-btn" onclick="fetchMatchesFromAPI()" id="fetchApiBtn">📥 ดึงคู่บอลวันนี้จาก API (ทุกลีกทั้งหมด)</button>
             <span id="fetchStatus" style="color:#ff9800; font-size:12px; margin-left:10px;"></span>
-            <p class="note-text" style="margin-top:8px; margin-bottom:0;">* กดปุ่มแล้วรอ 5-15 วินาที (ดึง 16 ลีก) | ต้องเลือกวันที่ก่อนกด</p>
+            <p class="note-text" style="margin-top:8px; margin-bottom:0;">* กดปุ่มแล้วรอ 3-10 วินาที (ดึงทุกลีกทั้งหมดในโลก ในครั้งเดียว) | ต้องเลือกวันที่ก่อนกด</p>
         </div>
         <table style="margin-top: 15px;">
-            <thead><tr><th>วันที่</th><th>เวลา</th><th>คู่บอล</th><th>สถานะ</th><th>จัดการ</th></tr></thead>
+            <thead><tr><th>วันที่</th><th>เวลา</th><th>ลีก / คู่บอล</th><th>สถานะ</th><th>จัดการ</th></tr></thead>
             <tbody id="masterMatchTableBody"></tbody>
         </table>
     </div>
@@ -552,6 +559,7 @@ let sessionTimer = null;
 let lastActivity = Date.now();
 
 let cloudUsers = [];
+let cloudCustomers = [];
 
 function initUsers() { /* ใช้คลาวด์แล้ว */ }
 function getUsers() { return cloudUsers; }
@@ -578,6 +586,8 @@ function doLogout() {
     if (sessionTimer) clearInterval(sessionTimer);
     const mgmtCard = document.getElementById('userMgmtCard');
     if (mgmtCard) mgmtCard.style.display = 'none';
+    const custCard = document.getElementById('customerMgmtCard');
+    if (custCard) custCard.style.display = 'none';
     document.getElementById('mainApp').style.display = 'none';
     document.getElementById('loginScreen').style.display = 'flex';
     document.getElementById('loginUser').value = '';
@@ -619,6 +629,8 @@ function applyRoleUI() {
     });
     const mgmtCard = document.getElementById('userMgmtCard');
     if (mgmtCard && !isAdmin()) mgmtCard.style.display = 'none';
+    const custCard = document.getElementById('customerMgmtCard');
+    if (custCard && !isAdmin()) custCard.style.display = 'none';
     document.getElementById('actionCol').style.display = isAdmin() ? '' : 'none';
 }
 
@@ -715,11 +727,12 @@ let editingStakeBetId = null;
 // ============================================================
 async function loadAllFromCloud() {
     try {
-        const [betsRes, matchRes, setRes, userRes] = await Promise.all([
+        const [betsRes, matchRes, setRes, userRes, custRes] = await Promise.all([
             sb.from('fivem_bets').select('id, data').order('id'),
             sb.from('fivem_matches').select('id, data').order('id'),
             sb.from('fivem_settings').select('data').eq('id', 'main').maybeSingle(),
-            sb.from('fivem_users').select('id, data')
+            sb.from('fivem_users').select('id, data'),
+            sb.from('fivem_customers').select('id, data')
         ]);
         if (betsRes.error) throw betsRes.error;
         if (matchRes.error) throw matchRes.error;
@@ -743,6 +756,16 @@ async function loadAllFromCloud() {
         } else {
             cloudUsers = u.map(r => r.data);
         }
+        // โหลดลูกค้า
+        cloudCustomers = (custRes.data || []).map(r => r.data);
+        // สร้างลูกค้าอัตโนมัติจากบิลเก่า
+        let newCusts = [];
+        bets.forEach(b => {
+            if (b.player && !cloudCustomers.find(c => c.phone === b.player) && !newCusts.find(c => c.phone === b.player)) {
+                newCusts.push({ phone: b.player, name: '', notes: '', created_at: new Date().toISOString() });
+            }
+        });
+        if (newCusts.length) { cloudCustomers.push(...newCusts); syncCustomers(); }
     } catch (e) {
         console.error('loadAllFromCloud:', e);
         alert('⚠️ เชื่อมต่อฐานข้อมูลไม่สำเร็จ ลองรีเฟรชอีกครั้ง\n' + (e.message || ''));
@@ -803,7 +826,17 @@ async function syncSettings() {
 
 function saveData() { syncBets(); }
 function saveMatches() { syncMatches(); }
-
+function saveCustomers() { syncCustomers(); }
+async function syncCustomers() {
+    try {
+        const rows = cloudCustomers.map(c => ({ id: c.phone, data: c }));
+        if (rows.length) await sb.from('fivem_customers').upsert(rows, { onConflict: 'id' });
+        const { data: all } = await sb.from('fivem_customers').select('id');
+        const ids = new Set(rows.map(r => r.id));
+        const gone = (all || []).filter(r => !ids.has(r.id)).map(r => r.id);
+        if (gone.length) await sb.from('fivem_customers').delete().in('id', gone);
+    } catch (e) { console.error('syncCustomers:', e); }
+}
 // ============================================================
 // ===== ตั้งค่า =====
 // ============================================================
@@ -831,59 +864,32 @@ function saveSettings() {
 // ===== 📥 ดึงคู่บอลจาก TheSportsDB API (ทุกลีกหลัก) =====
 // ============================================================
 const THE_SPORTS_DB_KEY = '3'; // Public test key — สมัครฟรีที่ thesportsdb.com ถ้าโดนจำกัด
-const MAJOR_LEAGUES = [
-    'English Premier League',
-    'Spanish La Liga',
-    'Italian Serie A',
-    'German Bundesliga',
-    'French Ligue 1',
-    'Thai Premier League',
-    'Thai League 1',
-    'UEFA Champions League',
-    'UEFA Europa League',
-    'UEFA Europa Conference League',
-    'Dutch Eredivisie',
-    'Portuguese Primeira Liga',
-    'Scottish Premier League',
-    'Turkish Super Lig',
-    'Belgian First Division A',
-    'English League Championship'
-];
 
 async function fetchMatchesFromAPI() {
     if (!isAdmin()) return;
     const dateInput = document.getElementById('masterDate').value;
-    if (!dateInput) { alert('กรุณาเลือกวันที่แข่งก่อน (ช่อง "วันที่แข่ง")'); return; }
+    if (!dateInput) { alert('กรุณาเลือกวันที่แข่งก่อน'); return; }
     
     const btn = document.getElementById('fetchApiBtn');
     const status = document.getElementById('fetchStatus');
     btn.disabled = true;
     btn.style.opacity = '0.5';
     btn.innerText = '⏳ กำลังดึง...';
+    let added = 0, skipped = 0;
+    status.innerText = 'กำลังดึงคู่บอลทุกลีกทั้งหมด...';
     
-    let added = 0;
-    let skipped = 0;
-    let leagueFound = 0;
-    let errors = 0;
-    
-    for (let i = 0; i < MAJOR_LEAGUES.length; i++) {
-        const league = MAJOR_LEAGUES[i];
-        status.innerText = `กำลังดึง... (${i+1}/${MAJOR_LEAGUES.length}) ${league}`;
+    try {
+        const url = `https://www.thesportsdb.com/api/v1/json/${THE_SPORTS_DB_KEY}/eventsday.php?d=${dateInput}&s=Soccer`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
         
-        try {
-            const url = `https://www.thesportsdb.com/api/v1/json/${THE_SPORTS_DB_KEY}/eventsday.php?d=${dateInput}&l=${encodeURIComponent(league)}`;
-            const res = await fetch(url);
-            if (!res.ok) { console.error('HTTP', res.status, league); errors++; continue; }
-            
-            const data = await res.json();
-            if (!data || !data.events) continue;
-            
-            leagueFound++;
-            
+        if (data && data.events) {
             for (const ev of data.events) {
                 const home = (ev.strHomeTeam || '').trim();
                 const away = (ev.strAwayTeam || '').trim();
-                if (!home || !away || home === 'TBD' || away === 'TBD' || home === 'To Be Determined' || away === 'To Be Determined') continue;
+                const league = (ev.strLeague || '').trim();
+                if (!home || !away || home === 'TBD' || away === 'TBD') continue;
                 
                 const exists = matchesMasterList.some(m => 
                     m.date === dateInput && 
@@ -896,10 +902,8 @@ async function fetchMatchesFromAPI() {
                     const d = new Date(parseInt(ev.strTimestamp) * 1000);
                     if (!isNaN(d.getTime())) {
                         time = d.toLocaleTimeString('en-GB', { 
-                            hour: '2-digit', 
-                            minute: '2-digit', 
-                            timeZone: 'Asia/Bangkok',
-                            hour12: false 
+                            hour: '2-digit', minute: '2-digit', 
+                            timeZone: 'Asia/Bangkok', hour12: false 
                         });
                     }
                 } else if (ev.strTime) {
@@ -908,32 +912,27 @@ async function fetchMatchesFromAPI() {
                 
                 matchesMasterList.push({
                     id: Date.now() + Math.floor(Math.random() * 1000000),
-                    date: dateInput,
-                    time: time,
-                    name: `${home}-${away}`,
-                    teams: [home, away],
-                    locked: false
+                    date: dateInput, time, name: `${home}-${away}`,
+                    teams: [home, away], league, locked: false
                 });
                 added++;
             }
-        } catch (e) { 
-            console.error('fetch error', league, e); 
-            errors++;
         }
+    } catch (e) {
+        console.error('fetch error:', e);
+        btn.disabled = false; btn.style.opacity = '1';
+        btn.innerText = '📥 ดึงคู่บอลวันนี้จาก API (ทุกลีกทั้งหมด)';
+        status.innerText = '';
+        alert('❌ ดึงข้อมูลไม่สำเร็จ: ' + e.message + '\n\nถ้าเกิดบ่อยๆ สมัคร key ฟรีที่ thesportsdb.com แล้วแทนค่า THE_SPORTS_DB_KEY');
+        return;
     }
     
-    saveMatches();
-    renderMasterMatches();
-    updateBetFormDropdowns();
-    
-    btn.disabled = false;
-    btn.style.opacity = '1';
-    btn.innerText = '📥 ดึงคู่บอลวันนี้จาก API (ทุกลีกหลัก)';
+    saveMatches(); renderMasterMatches(); updateBetFormDropdowns();
+    btn.disabled = false; btn.style.opacity = '1';
+    btn.innerText = '📥 ดึงคู่บอลวันนี้จาก API (ทุกลีกทั้งหมด)';
     status.innerText = '';
-    
-    alert(`✅ ดึงเสร็จเรียบร้อย\n\n📅 วันที่: ${dateInput}\n🆕 เพิ่มใหม่: ${added} คู่\n⏭️ มีอยู่แล้ว (ข้าม): ${skipped} คู่\n⚽ พบใน ${leagueFound}/${MAJOR_LEAGUES.length} ลีก${errors ? `\n⚠️ ผิดพลาด ${errors} ลีก` : ''}`);
+    alert(`✅ ดึงเสร็จเรียบร้อย\n\n📅 วันที่: ${dateInput}\n🆕 เพิ่มใหม่: ${added} คู่\n⏭️ มีอยู่แล้ว (ข้าม): ${skipped} คู่`);
 }
-
 // ============================================================
 // ===== จัดการคู่บอลประจำวัน =====
 // ============================================================
@@ -979,7 +978,8 @@ function renderMasterMatches() {
     tbody.innerHTML = '';
     const sorted = [...matchesMasterList].sort((a,b) => new Date(a.date + ' ' + a.time) - new Date(b.date + ' ' + b.time));
     sorted.forEach(m => {
-        tbody.innerHTML += `<tr><td>${m.date}</td><td>${m.time}</td><td>${m.name} ( ${m.teams[0]} / ${m.teams[1]} )</td><td style="color:${m.locked ? '#f44336' : '#4caf50'}; font-weight:bold;">${m.locked ? 'ปิดรับ' : 'เปิดรับ'}</td><td><button class="${m.locked ? 'unlock-btn' : 'lock-btn'}" onclick="toggleLockMatch(${m.id})">${m.locked ? 'เปิดรับ' : 'ปิดรับ'}</button> <button class="danger" onclick="deleteMasterMatch(${m.id})">ลบ</button></td></tr>`;
+        const leagueInfo = m.league ? `<br><span style="color:#ff9800; font-size:11px;">${m.league}</span>` : '';
+        tbody.innerHTML += `<tr><td>${m.date}</td><td>${m.time}</td><td>${m.name}${leagueInfo} ( ${m.teams[0]} / ${m.teams[1]} )</td><td style="color:${m.locked ? '#f44336' : '#4caf50'}; font-weight:bold;">${m.locked ? 'ปิดรับ' : 'เปิดรับ'}</td><td><button class="${m.locked ? 'unlock-btn' : 'lock-btn'}" onclick="toggleLockMatch(${m.id})">${m.locked ? 'เปิดรับ' : 'ปิดรับ'}</button> <button class="danger" onclick="deleteMasterMatch(${m.id})">ลบ</button></td></tr>`;
     });
 }
 
@@ -989,8 +989,9 @@ function updateBetFormDropdowns() {
     singleSelect.innerHTML = '<option value="">-- เลือกทีมเต็ง --</option>';
     stepMatchSelect.innerHTML = '<option value="">-- เลือกคู่บอล --</option>';
     matchesMasterList.filter(m => !m.locked).forEach(m => {
-        m.teams.forEach(team => { singleSelect.innerHTML += `<option value="${team}">${team} (${m.time})</option>`; });
-        stepMatchSelect.innerHTML += `<option value="${m.id}">${m.name} (${m.time})</option>`;
+        const leagueTag = m.league ? ` [${m.league}]` : '';
+        m.teams.forEach(team => { singleSelect.innerHTML += `<option value="${team}">${team} (${m.time})${leagueTag}</option>`; });
+        stepMatchSelect.innerHTML += `<option value="${m.id}">${m.name} (${m.time})${leagueTag}</option>`;
     });
     updateTeamDropdownForStep();
 }
@@ -1098,6 +1099,11 @@ function submitBet() {
             bets[betIndex] = { ...oldBet, ...newBet };
         }
     } else { bets.push(newBet); }
+    // สร้างลูกค้าอัตโนมัติถ้ายังไม่มี
+    if (!cloudCustomers.find(c => c.phone === playerName)) {
+        cloudCustomers.push({ phone: playerName, name: '', notes: '', created_at: new Date().toISOString() });
+        saveCustomers();
+    }
 
     if (editId) {
         const updatedBet = bets.find(b => b.id == editId);
@@ -1336,7 +1342,126 @@ function clearFilters() {
 
 function populatePlayerDatalist() {
     const dl = document.getElementById('playerList');
-    dl.innerHTML = [...new Set(bets.map(b => b.player))].map(p => `<option value="${p}">`).join('');
+    const fromCustomers = cloudCustomers.map(c => c.phone);
+    const fromBets = bets.map(b => b.player);
+    const all = [...new Set([...fromCustomers, ...fromBets])];
+    dl.innerHTML = all.map(p => {
+        const cust = cloudCustomers.find(c => c.phone === p);
+        const label = cust && cust.name ? `${p} (${cust.name})` : p;
+        return `<option value="${p}">${label}</option>`;
+    }).join('');
+}
+
+// ===== จัดการลูกค้า =====
+function toggleCustomerMgmt() {
+    if (!isAdmin()) return;
+    const c = document.getElementById('customerMgmtCard');
+    c.style.display = c.style.display === 'none' ? '' : 'none';
+    if (c.style.display !== 'none') renderCustomerTable();
+}
+
+function renderCustomerTable() {
+    const tb = document.getElementById('customerTableBody');
+    tb.innerHTML = '';
+    if (!cloudCustomers.length) {
+        tb.innerHTML = '<tr><td colspan="6" style="color:#888;">ยังไม่มีลูกค้า — เพิ่มเองหรือสร้างบิลแทงแล้วระบบจะบันทึกให้อัตโนมัติ</td></tr>';
+        return;
+    }
+    const sorted = [...cloudCustomers].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    sorted.forEach(c => {
+        const custBets = bets.filter(b => b.player === c.phone);
+        const billCount = custBets.length;
+        const totalStake = custBets.reduce((sum, b) => sum + b.stake, 0);
+        const act = `<button class="danger" style="padding:5px 12px;font-size:13px;" onclick="deleteCustomer('${c.phone}')">ลบ</button>`;
+        tb.innerHTML += `<tr><td><b>${c.phone}</b></td><td>${c.name || '-'}</td><td style="font-size:12px; color:#aaa;">${c.notes || '-'}</td><td>${billCount}</td><td>${totalStake.toFixed(2)}</td><td>${act}</td></tr>`;
+    });
+}
+
+function addCustomer() {
+    if (!isAdmin()) return;
+    const phone = document.getElementById('newCustPhone').value.trim();
+    const name = document.getElementById('newCustName').value.trim();
+    const notes = document.getElementById('newCustNotes').value.trim();
+    if (!phone) { alert('กรุณากรอกเบอร์โทรลูกค้า'); return; }
+    if (cloudCustomers.find(c => c.phone === phone)) { alert('เบอร์นี้มีอยู่แล้วในระบบ'); return; }
+    cloudCustomers.push({ phone, name, notes, created_at: new Date().toISOString() });
+    saveCustomers();
+    document.getElementById('newCustPhone').value = '';
+    document.getElementById('newCustName').value = '';
+    document.getElementById('newCustNotes').value = '';
+    renderCustomerTable();
+    populatePlayerDatalist();
+    alert(`เพิ่มลูกค้า "${name || phone}" เรียบร้อย`);
+}
+
+function deleteCustomer(phone) {
+    if (!isAdmin()) return;
+    const custBets = bets.filter(b => b.player === phone);
+    if (custBets.length > 0) {
+        if (!confirm(`ลูกค้า "${phone}" มีบิลอยู่ ${custBets.length} รายการ — ลบได้แต่บิลจะยังเก็บเบอร์ไว้\n\nยืนยันลบข้อมูลลูกค้า?`)) return;
+    } else {
+        if (!confirm(`ลบลูกค้า "${phone}"?`)) return;
+    }
+    cloudCustomers = cloudCustomers.filter(c => c.phone !== phone);
+    saveCustomers();
+    renderCustomerTable();
+    populatePlayerDatalist();
+}
+
+// ===== จัดการลูกค้า =====
+function toggleCustomerMgmt() {
+    if (!isAdmin()) return;
+    const c = document.getElementById('customerMgmtCard');
+    c.style.display = c.style.display === 'none' ? '' : 'none';
+    if (c.style.display !== 'none') renderCustomerTable();
+}
+
+function renderCustomerTable() {
+    const tb = document.getElementById('customerTableBody');
+    tb.innerHTML = '';
+    if (!cloudCustomers.length) {
+        tb.innerHTML = '<tr><td colspan="6" style="color:#888;">ยังไม่มีลูกค้า — เพิ่มเองหรือสร้างบิลแทงแล้วระบบจะบันทึกให้อัตโนมัติ</td></tr>';
+        return;
+    }
+    const sorted = [...cloudCustomers].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    sorted.forEach(c => {
+        const custBets = bets.filter(b => b.player === c.phone);
+        const billCount = custBets.length;
+        const totalStake = custBets.reduce((sum, b) => sum + b.stake, 0);
+        const act = `<button class="danger" style="padding:5px 12px;font-size:13px;" onclick="deleteCustomer('${c.phone}')">ลบ</button>`;
+        tb.innerHTML += `<tr><td><b>${c.phone}</b></td><td>${c.name || '-'}</td><td style="font-size:12px; color:#aaa;">${c.notes || '-'}</td><td>${billCount}</td><td>${totalStake.toFixed(2)}</td><td>${act}</td></tr>`;
+    });
+}
+
+function addCustomer() {
+    if (!isAdmin()) return;
+    const phone = document.getElementById('newCustPhone').value.trim();
+    const name = document.getElementById('newCustName').value.trim();
+    const notes = document.getElementById('newCustNotes').value.trim();
+    if (!phone) { alert('กรุณากรอกเบอร์โทรลูกค้า'); return; }
+    if (cloudCustomers.find(c => c.phone === phone)) { alert('เบอร์นี้มีอยู่แล้วในระบบ'); return; }
+    cloudCustomers.push({ phone, name, notes, created_at: new Date().toISOString() });
+    saveCustomers();
+    document.getElementById('newCustPhone').value = '';
+    document.getElementById('newCustName').value = '';
+    document.getElementById('newCustNotes').value = '';
+    renderCustomerTable();
+    populatePlayerDatalist();
+    alert(`เพิ่มลูกค้า "${name || phone}" เรียบร้อย`);
+}
+
+function deleteCustomer(phone) {
+    if (!isAdmin()) return;
+    const custBets = bets.filter(b => b.player === phone);
+    if (custBets.length > 0) {
+        if (!confirm(`ลูกค้า "${phone}" มีบิลอยู่ ${custBets.length} รายการ — ลบได้แต่บิลจะยังเก็บเบอร์ไว้\n\nยืนยันลบข้อมูลลูกค้า?`)) return;
+    } else {
+        if (!confirm(`ลบลูกค้า "${phone}"?`)) return;
+    }
+    cloudCustomers = cloudCustomers.filter(c => c.phone !== phone);
+    saveCustomers();
+    renderCustomerTable();
+    populatePlayerDatalist();
 }
 
 function renderTable() {
@@ -1479,7 +1604,9 @@ function renderPlayerSummary() {
     const tbody = document.getElementById('playerSummaryTableBody');
     tbody.innerHTML = Object.entries(byPlayer).map(([player, s]) => {
         const profit = (s.stake - s.refund) - s.payout;
-        return `<tr><td><b>${player}</b></td><td>${s.stake.toFixed(2)}</td><td>${s.payout.toFixed(2)}</td><td>${s.refund.toFixed(2)}</td><td class="${profit >= 0 ? 'profit' : 'loss'}">${profit >= 0 ? '+' : ''}${profit.toFixed(2)}</td></tr>`;
+        const cust = cloudCustomers.find(c => c.phone === player);
+        const nameTag = cust && cust.name ? ` (${cust.name})` : '';
+        return `<tr><td><b>${player}</b>${nameTag}</td><td>${s.stake.toFixed(2)}</td><td>${s.payout.toFixed(2)}</td><td>${s.refund.toFixed(2)}</td><td class="${profit >= 0 ? 'profit' : 'loss'}">${profit >= 0 ? '+' : ''}${profit.toFixed(2)}</td></tr>`;
     }).join('');
     if (!tbody.innerHTML) tbody.innerHTML = '<tr><td colspan="5" style="color:#888;">ไม่มีข้อมูล</td></tr>';
 }
@@ -1536,9 +1663,14 @@ function importFromExcel(event) {
                     type: r['รายการ'] || (betType === 'single' ? 'เต็ง' : `สเต็ป ${matches.length} คู่`),
                     matches: matches
                 };
-                if (newBet.date && newBet.player && !bets.some(b => b.id === newBet.id)) { bets.push(newBet); count++; }
+                if (newBet.date && newBet.player && !bets.some(b => b.id === newBet.id)) {
+                    bets.push(newBet); count++;
+                    if (!cloudCustomers.find(c => c.phone === newBet.player)) {
+                        cloudCustomers.push({ phone: newBet.player, name: '', notes: '', created_at: new Date().toISOString() });
+                    }
+                }
             });
-            saveData(); renderTable();
+            saveCustomers(); saveData(); renderTable();
             alert(`นำเข้าสำเร็จ ${count} รายการ`);
         } catch (err) { alert('ไฟล์ไม่ถูกต้อง: ' + err.message); }
     };

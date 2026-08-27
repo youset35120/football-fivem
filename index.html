@@ -287,6 +287,10 @@ create policy "open_customers" on fivem_customers for all to anon, authenticated
             .login-card { padding: 30px 20px; }
         }
     </style>
+
+<style id="master-inline-edit-css">
+.master-inline-input{width:100%;box-sizing:border-box;padding:7px 9px;border:1px solid #4caf50;border-radius:6px;background:#171a20;color:#fff;outline:none}.master-inline-input:focus{box-shadow:0 0 0 2px rgba(76,175,80,.15)}.master-edit-actions{display:flex;gap:5px;justify-content:center;flex-wrap:wrap}.master-edit-actions button{padding:7px 10px;font-size:12px}
+</style>
 </head>
 <body>
 
@@ -687,8 +691,22 @@ function addUser() {
     renderUserTable();
     alert(`เพิ่ม "${nm || un}" เรียบร้อย`);
 }
-function deleteUser(un) {
-    if (confirm(`ลบผู้ใช้ "${un}"?`)) { saveUsers(getUsers().filter(u => u.username !== un)); renderUserTable(); }
+async function deleteUser(un) {
+    if (!isAdmin()) return;
+    if (!confirm(`ลบผู้ใช้ "${un}"?`)) return;
+
+    const old = cloudUsers;
+    cloudUsers = getUsers().filter(u => u.username !== un);
+
+    if (cloudReady) {
+        const ok = await deleteCloudRow('fivem_users', un);
+        if (!ok) {
+            cloudUsers = old;
+            renderUserTable();
+            return;
+        }
+    }
+    renderUserTable();
 }
 function showChangePassword() {
     document.getElementById('cpOldPass').value = '';
@@ -727,11 +745,17 @@ let currentStatusFilter = "";
 let currentDateFilter = "";
 let changeTeamBetId = null;
 let editingStakeBetId = null;
+let cloudReady = false;
+let cloudLoadError = null;
+let cloudSnapshotLoaded = false;
 
 // ============================================================
 // ===== 🌩️ SUPABASE SYNC (ข้อมูลรวมกลาง ทุกเครื่องเห็นเหมือนกัน) =====
 // ============================================================
 async function loadAllFromCloud() {
+    cloudReady = false;
+    cloudLoadError = null;
+
     try {
         const [betsRes, matchRes, setRes, userRes, custRes] = await Promise.all([
             sb.from('fivem_bets').select('id, data').order('id'),
@@ -740,89 +764,153 @@ async function loadAllFromCloud() {
             sb.from('fivem_users').select('id, data'),
             sb.from('fivem_customers').select('id, data')
         ]);
-        if (betsRes.error) throw betsRes.error;
-        if (matchRes.error) throw matchRes.error;
-        if (userRes.error) throw userRes.error;
 
-        bets = (betsRes.data || []).map(r => r.data);
-        matchesMasterList = (matchRes.data || []).map(r => r.data);
+        // สำคัญ: ถ้าอ่านข้อมูลไม่ได้ ห้ามตั้ง array เป็น [] และห้าม sync/delete อะไรทั้งนั้น
+        const firstError = [betsRes, matchRes, setRes, userRes, custRes].find(r => r && r.error);
+        if (firstError?.error) throw firstError.error;
 
-        if (setRes.data && setRes.data.data) settings = setRes.data.data;
-        else {
+        bets = (betsRes.data || []).map(r => r.data).filter(Boolean);
+        matchesMasterList = (matchRes.data || []).map(r => r.data).filter(Boolean);
+
+        if (setRes.data && setRes.data.data) {
+            settings = setRes.data.data;
+        } else {
             const localSet = JSON.parse(localStorage.getItem('fivemSettings') || 'null');
             if (localSet) settings = localSet;
-            syncSettings();
+            // ไม่เขียนค่าใหม่ขึ้น cloud ตอนโหลดครั้งแรก
         }
 
         const u = userRes.data || [];
         if (u.length === 0) {
             const local = JSON.parse(localStorage.getItem(USERS_KEY) || '[]');
-            cloudUsers = local.length ? local : [{ username: 'admin', password: '1234', role: 'admin', name: 'เจ้ามือ' }];
-            syncUsers();
+            cloudUsers = local.length ? local : [
+                { username: 'admin', password: '1234', role: 'admin', name: 'เจ้ามือ' }
+            ];
+            // ถ้า cloud ยังไม่มีผู้ใช้จริง ค่อยสร้าง default ได้
+            if (!u.length) await syncUsers();
         } else {
-            cloudUsers = u.map(r => r.data);
+            cloudUsers = u.map(r => r.data).filter(Boolean);
         }
-        // โหลดลูกค้า
-        cloudCustomers = (custRes.data || []).map(r => r.data);
-        // สร้างลูกค้าอัตโนมัติจากบิลเก่า
+
+        cloudCustomers = (custRes.data || []).map(r => r.data).filter(Boolean);
+
+        // สร้างลูกค้าอัตโนมัติจากบิลเก่า เฉพาะเมื่ออ่าน cloud สำเร็จแล้ว
         let newCusts = [];
         bets.forEach(b => {
-            if (b.player && !cloudCustomers.find(c => c.phone === b.player) && !newCusts.find(c => c.phone === b.player)) {
-                newCusts.push({ phone: b.player, name: '', notes: '', created_at: new Date().toISOString() });
+            if (
+                b.player &&
+                !cloudCustomers.find(c => c.phone === b.player) &&
+                !newCusts.find(c => c.phone === b.player)
+            ) {
+                newCusts.push({
+                    phone: b.player,
+                    name: '',
+                    notes: '',
+                    created_at: new Date().toISOString()
+                });
             }
         });
-        if (newCusts.length) { cloudCustomers.push(...newCusts); syncCustomers(); }
+        if (newCusts.length) {
+            cloudCustomers.push(...newCusts);
+            await syncCustomers();
+        }
+
+        cloudReady = true;
+        cloudSnapshotLoaded = true;
+        console.log(`Cloud loaded: ${bets.length} bets, ${matchesMasterList.length} matches`);
+        return true;
     } catch (e) {
+        cloudReady = false;
+        cloudLoadError = e;
         console.error('loadAllFromCloud:', e);
-        alert('⚠️ เชื่อมต่อฐานข้อมูลไม่สำเร็จ ลองรีเฟรชอีกครั้ง\n' + (e.message || ''));
+        alert(
+            '⚠️ อ่านข้อมูลจากฐานข้อมูลไม่สำเร็จ\\n\\n' +
+            'ระบบจะไม่ลบหรือเขียนทับข้อมูลบนคลาวด์เพื่อป้องกันข้อมูลหาย\\n\\n' +
+            'รายละเอียด: ' + (e.message || 'ไม่ทราบสาเหตุ') +
+            '\\n\\nให้ตรวจสอบ Supabase / RLS แล้วรีเฟรชหน้าเว็บ'
+        );
+        return false;
     }
 }
 
 async function migrateLocalToCloud() {
+    if (!cloudReady || !cloudSnapshotLoaded) return;
+
     const localBets = JSON.parse(localStorage.getItem('fivemBets') || '[]');
     const localMatches = JSON.parse(localStorage.getItem('fivemMatchesMaster') || '[]');
+
+    // ย้าย local ขึ้น cloud เฉพาะเมื่อ cloud ว่างจริง ๆ เท่านั้น
     if (bets.length === 0 && matchesMasterList.length === 0 && (localBets.length || localMatches.length)) {
-        if (confirm('พบข้อมูลเก่าในเครื่องนี้ ย้ายขึ้นคลาวด์เลยไหม? (เพื่อให้ทุกเครื่องเห็นข้อมูลชุดเดียวกัน)')) {
-            bets = localBets;
-            matchesMasterList = localMatches;
-            await syncBets();
-            await syncMatches();
+        if (confirm('พบข้อมูลเก่าในเครื่องนี้ แต่ฐานข้อมูลกลางว่างอยู่ ย้ายขึ้นคลาวด์เลยไหม?')) {
+            if (localBets.length) {
+                bets = localBets;
+                await syncBets();
+            }
+            if (localMatches.length) {
+                matchesMasterList = localMatches;
+                await syncMatches();
+            }
+            renderTable();
             alert('ย้ายข้อมูลเรียบร้อย ✅');
         }
     }
 }
 
 async function syncBets() {
+    if (!cloudReady) {
+        console.warn('syncBets blocked: cloud is not ready');
+        return false;
+    }
     try {
         const rows = bets.map(b => ({ id: String(b.id), data: b }));
-        if (rows.length) await sb.from('fivem_bets').upsert(rows, { onConflict: 'id' });
-        const { data: all } = await sb.from('fivem_bets').select('id');
-        const ids = new Set(rows.map(r => r.id));
-        const gone = (all || []).filter(r => !ids.has(r.id)).map(r => r.id);
-        if (gone.length) await sb.from('fivem_bets').delete().in('id', gone);
-    } catch (e) { console.error('syncBets:', e); }
+        if (rows.length) {
+            const { error } = await sb.from('fivem_bets').upsert(rows, { onConflict: 'id' });
+            if (error) throw error;
+        }
+        return true;
+    } catch (e) {
+        console.error('syncBets:', e);
+        alert('⚠️ บันทึกบิลขึ้นคลาวด์ไม่สำเร็จ: ' + (e.message || ''));
+        return false;
+    }
 }
 
 async function syncMatches() {
+    if (!cloudReady) {
+        console.warn('syncMatches blocked: cloud is not ready');
+        return false;
+    }
     try {
         const rows = matchesMasterList.map(m => ({ id: String(m.id), data: m }));
-        if (rows.length) await sb.from('fivem_matches').upsert(rows, { onConflict: 'id' });
-        const { data: all } = await sb.from('fivem_matches').select('id');
-        const ids = new Set(rows.map(r => r.id));
-        const gone = (all || []).filter(r => !ids.has(r.id)).map(r => r.id);
-        if (gone.length) await sb.from('fivem_matches').delete().in('id', gone);
-    } catch (e) { console.error('syncMatches:', e); }
+        if (rows.length) {
+            const { error } = await sb.from('fivem_matches').upsert(rows, { onConflict: 'id' });
+            if (error) throw error;
+        }
+        return true;
+    } catch (e) {
+        console.error('syncMatches:', e);
+        alert('⚠️ บันทึกคู่บอลขึ้นคลาวด์ไม่สำเร็จ: ' + (e.message || ''));
+        return false;
+    }
 }
 
 async function syncUsers() {
+    if (!cloudReady) {
+        console.warn('syncUsers blocked: cloud is not ready');
+        return false;
+    }
     try {
         const rows = cloudUsers.map(u => ({ id: u.username, data: u }));
-        if (rows.length) await sb.from('fivem_users').upsert(rows, { onConflict: 'id' });
-        const { data: all } = await sb.from('fivem_users').select('id');
-        const ids = new Set(rows.map(r => r.id));
-        const gone = (all || []).filter(r => !ids.has(r.id)).map(r => r.id);
-        if (gone.length) await sb.from('fivem_users').delete().in('id', gone);
-    } catch (e) { console.error('syncUsers:', e); }
+        if (rows.length) {
+            const { error } = await sb.from('fivem_users').upsert(rows, { onConflict: 'id' });
+            if (error) throw error;
+        }
+        return true;
+    } catch (e) {
+        console.error('syncUsers:', e);
+        alert('⚠️ บันทึกผู้ใช้ขึ้นคลาวด์ไม่สำเร็จ: ' + (e.message || ''));
+        return false;
+    }
 }
 
 async function syncSettings() {
@@ -830,19 +918,58 @@ async function syncSettings() {
     catch (e) { console.error('syncSettings:', e); }
 }
 
-function saveData() { syncBets(); }
+async function deleteCloudRow(table, id) {
+    if (!cloudReady) return false;
+    try {
+        const { error } = await sb.from(table).delete().eq('id', String(id));
+        if (error) throw error;
+        return true;
+    } catch (e) {
+        console.error(`delete ${table}:`, e);
+        alert('⚠️ ลบข้อมูลบนคลาวด์ไม่สำเร็จ: ' + (e.message || ''));
+        return false;
+    }
+}
+
+async function clearCloudTable(table) {
+    if (!cloudReady) return false;
+    try {
+        // ใช้ filter ที่เป็นจริงเสมอ แทนการพึ่ง local array
+        const { error } = await sb.from(table).delete().not('id', 'is', null);
+        if (error) throw error;
+        return true;
+    } catch (e) {
+        console.error(`clear ${table}:`, e);
+        alert('⚠️ ล้างข้อมูลบนคลาวด์ไม่สำเร็จ: ' + (e.message || ''));
+        return false;
+    }
+}
+
+function saveData() { if (cloudReady) syncBets(); }
+function saveMatches() { if (cloudReady) syncMatches(); }
+function saveCustomers() { if (cloudReady) syncCustomers(); }
+
 function saveMatches() { syncMatches(); }
 function saveCustomers() { syncCustomers(); }
 async function syncCustomers() {
+    if (!cloudReady) {
+        console.warn('syncCustomers blocked: cloud is not ready');
+        return false;
+    }
     try {
         const rows = cloudCustomers.map(c => ({ id: c.phone, data: c }));
-        if (rows.length) await sb.from('fivem_customers').upsert(rows, { onConflict: 'id' });
-        const { data: all } = await sb.from('fivem_customers').select('id');
-        const ids = new Set(rows.map(r => r.id));
-        const gone = (all || []).filter(r => !ids.has(r.id)).map(r => r.id);
-        if (gone.length) await sb.from('fivem_customers').delete().in('id', gone);
-    } catch (e) { console.error('syncCustomers:', e); }
+        if (rows.length) {
+            const { error } = await sb.from('fivem_customers').upsert(rows, { onConflict: 'id' });
+            if (error) throw error;
+        }
+        return true;
+    } catch (e) {
+        console.error('syncCustomers:', e);
+        alert('⚠️ บันทึกลูกค้าขึ้นคลาวด์ไม่สำเร็จ: ' + (e.message || ''));
+        return false;
+    }
 }
+
 // ============================================================
 // ===== ตั้งค่า =====
 // ============================================================
@@ -979,35 +1106,45 @@ function addMasterMatch() {
     updateBetFormDropdowns();
 }
 
-function editMasterMatch(id) {
+let masterEditingId = null;
+
+function startMasterInlineEdit(id) {
     if (!isAdmin()) return;
-    const m = matchesMasterList.find(x => x.id == id);
-    if (!m) return;
-    const p1 = getMasterTeamPrice(m, m.teams[0]);
-    const p2 = getMasterTeamPrice(m, m.teams[1]);
-    const w = getMasterWinOdds(m) || settings.winOdds;
-    const newP1 = prompt(`ราคา ${m.teams[0]}`, p1);
-    if (newP1 === null) return;
-    const newP2 = prompt(`ราคา ${m.teams[1]}`, p2);
-    if (newP2 === null) return;
-    const newW = prompt('ค่าน้ำเริ่มต้นของคู่นี้', w);
-    if (newW === null) return;
-    m.teamPrices = [newP1.trim(), newP2.trim()];
-    const parsedW = parseFloat(newW);
-    m.defaultWinOdds = Number.isFinite(parsedW) ? parsedW : settings.winOdds;
-    saveMatches();
+    masterEditingId = id;
     renderMasterMatches();
-    updateBetFormDropdowns();
+    setTimeout(() => { const el=document.getElementById(`masterPrice1_${id}`); if(el){el.focus();el.select();} }, 0);
 }
 
-function deleteMasterMatch(id) {
+function cancelMasterInlineEdit() { masterEditingId=null; renderMasterMatches(); }
+
+function saveMasterInlineEdit(id) {
     if (!isAdmin()) return;
-    if (confirm('ต้องการลบคู่บอลนี้ใช่ไหม?')) {
-        matchesMasterList = matchesMasterList.filter(m => m.id !== id);
-        saveMatches();
-        renderMasterMatches();
-        updateBetFormDropdowns();
+    const m=matchesMasterList.find(x=>x.id==id); if(!m) return;
+    const p1=document.getElementById(`masterPrice1_${id}`)?.value.trim()||'';
+    const p2=document.getElementById(`masterPrice2_${id}`)?.value.trim()||'';
+    const w=document.getElementById(`masterWater_${id}`)?.value.trim()||'';
+    m.teamPrices=[p1,p2];
+    const parsed=parseFloat(w); m.defaultWinOdds=Number.isFinite(parsed)?parsed:settings.winOdds;
+    saveMatches(); masterEditingId=null; renderMasterMatches(); updateBetFormDropdowns();
+}
+
+async function deleteMasterMatch(id) {
+    if (!isAdmin()) return;
+    if (!confirm('ลบคู่นี้ใช่ไหม?')) return;
+
+    const old = matchesMasterList;
+    matchesMasterList = matchesMasterList.filter(m => m.id !== id);
+
+    if (cloudReady) {
+        const ok = await deleteCloudRow('fivem_matches', id);
+        if (!ok) {
+            matchesMasterList = old;
+            renderMasterMatches();
+            return;
+        }
     }
+    renderMasterMatches();
+    updateBetFormDropdowns();
 }
 
 function toggleLockMatch(id) {
@@ -1022,15 +1159,21 @@ function toggleLockMatch(id) {
 }
 
 function renderMasterMatches() {
-    const tbody = document.getElementById('masterMatchTableBody');
-    tbody.innerHTML = '';
-    const sorted = [...matchesMasterList].sort((a,b) => new Date(a.date + ' ' + a.time) - new Date(b.date + ' ' + b.time));
-    sorted.forEach(m => {
-        const leagueInfo = m.league ? `<br><span style="color:#ff9800; font-size:11px;">${m.league}</span>` : '';
-        const p1 = getMasterTeamPrice(m, m.teams[0]) || '-';
-        const p2 = getMasterTeamPrice(m, m.teams[1]) || '-';
-        const water = getMasterWinOdds(m) || '-';
-        tbody.innerHTML += `<tr><td>${m.date}</td><td>${m.time}</td><td>${m.name}${leagueInfo} ( ${m.teams[0]} / ${m.teams[1]} )</td><td style="font-size:12px;">${m.teams[0]}: <b>${p1}</b><br>${m.teams[1]}: <b>${p2}</b></td><td style="color:#ff9800; font-weight:bold;">${water}</td><td style="color:${m.locked ? '#f44336' : '#4caf50'}; font-weight:bold;">${m.locked ? 'ปิดรับ' : 'เปิดรับ'}</td><td><button class="edit-btn" onclick="editMasterMatch(${m.id})">แก้ราคา/น้ำ</button> <button class="${m.locked ? 'unlock-btn' : 'lock-btn'}" onclick="toggleLockMatch(${m.id})">${m.locked ? 'เปิดรับ' : 'ปิดรับ'}</button> <button class="danger" onclick="deleteMasterMatch(${m.id})">ลบ</button></td></tr>`;
+    const tbody=document.getElementById('masterMatchTableBody');
+    tbody.innerHTML='';
+    const sorted=[...matchesMasterList].sort((a,b)=>new Date(a.date+' '+a.time)-new Date(b.date+' '+b.time));
+    sorted.forEach(m=>{
+        const leagueInfo=m.league?`<br><span style="color:#ff9800;font-size:11px;">${m.league}</span>`:'';
+        const p1=getMasterTeamPrice(m,m.teams[0])||''; const p2=getMasterTeamPrice(m,m.teams[1])||''; const water=getMasterWinOdds(m)||'';
+        const editing=masterEditingId==m.id;
+        const priceCell=editing
+          ? `<div style="display:grid;gap:6px;"><label style="font-size:11px;color:#aaa;">${m.teams[0]}</label><input class="master-inline-input" id="masterPrice1_${m.id}" value="${String(p1).replace(/&/g,'&amp;').replace(/"/g,'&quot;')}" placeholder="เช่น 0.5"><label style="font-size:11px;color:#aaa;">${m.teams[1]}</label><input class="master-inline-input" id="masterPrice2_${m.id}" value="${String(p2).replace(/&/g,'&amp;').replace(/"/g,'&quot;')}" placeholder="เช่น -0.5"></div>`
+          : `${m.teams[0]}: <b>${p1||'-'}</b><br>${m.teams[1]}: <b>${p2||'-'}</b>`;
+        const waterCell=editing?`<input class="master-inline-input" id="masterWater_${m.id}" type="number" step="0.01" value="${water}" placeholder="1.8">`:`<span style="color:#ff9800;font-weight:bold;">${water||'-'}</span>`;
+        const actions=editing
+          ? `<div class="master-edit-actions"><button class="master-save-btn" onclick="saveMasterInlineEdit(${m.id})">💾 บันทึก</button><button onclick="cancelMasterInlineEdit()">ยกเลิก</button></div>`
+          : `<button class="edit-btn" onclick="startMasterInlineEdit(${m.id})">✏️ แก้ราคา/น้ำ</button> <button class="${m.locked?'unlock-btn':'lock-btn'}" onclick="toggleLockMatch(${m.id})">${m.locked?'เปิดรับ':'ปิดรับ'}</button> <button class="danger" onclick="deleteMasterMatch(${m.id})">ลบ</button>`;
+        tbody.innerHTML+=`<tr><td>${m.date}</td><td>${m.time}</td><td>${m.name}${leagueInfo} ( ${m.teams[0]} / ${m.teams[1]} )</td><td style="font-size:12px;min-width:150px;">${priceCell}</td><td style="min-width:100px;">${waterCell}</td><td style="color:${m.locked?'#f44336':'#4caf50'};font-weight:bold;">${m.locked?'ปิดรับ':'เปิดรับ'}</td><td>${actions}</td></tr>`;
     });
 }
 
@@ -1410,21 +1553,33 @@ function cancelEdit() {
     document.getElementById('cancelBtn').style.display = 'none';
 }
 
-function deleteBet(id) {
+async function deleteBet(id) {
     if (!isAdmin()) return;
-    function togglePaid(id) { if (!isAdmin()) return; 
-    const bet = bets.find(b => b.id === id); 
-    if (!bet) return; bet.paid = !bet.paid; 
-    saveData(); renderTable(); }
-    if (confirm('ต้องการลบรายการนี้ใช่ไหม?')) { bets = bets.filter(b => b.id !== id); 
-    saveData();
-    renderTable(); }
+    if (!confirm('ต้องการลบรายการนี้ใช่ไหม?')) return;
+
+    const old = bets;
+    bets = bets.filter(b => b.id !== id);
+
+    if (cloudReady) {
+        const ok = await deleteCloudRow('fivem_bets', id);
+        if (!ok) {
+            bets = old;
+            renderTable();
+            return;
+        }
+    }
+    renderTable();
 }
 
-function clearAllData() {
-    if (!confirm('ล้างข้อมูลบิลทั้งหมด? ข้อมูลบนคลาวด์จะถูกลบด้วยและกู้คืนไม่ได้')) return;
+async function clearAllData() {
+    if (!isAdmin()) return;
+    if (!confirm('ล้างข้อมูลบิลทั้งหมด?\\n\\nการล้างจะลบข้อมูลบนคลาวด์ด้วย และกู้คืนไม่ได้')) return;
+
+    if (cloudReady) {
+        const ok = await clearCloudTable('fivem_bets');
+        if (!ok) return;
+    }
     bets = [];
-    saveData();
     renderTable();
 }
 
@@ -1504,16 +1659,26 @@ function addCustomer() {
     alert(`เพิ่มลูกค้า "${name || phone}" เรียบร้อย`);
 }
 
-function deleteCustomer(phone) {
+async function deleteCustomer(phone) {
     if (!isAdmin()) return;
     const custBets = bets.filter(b => b.player === phone);
     if (custBets.length > 0) {
-        if (!confirm(`ลูกค้า "${phone}" มีบิลอยู่ ${custBets.length} รายการ — ลบได้แต่บิลจะยังเก็บเบอร์ไว้\n\nยืนยันลบข้อมูลลูกค้า?`)) return;
+        if (!confirm(`ลูกค้า "${phone}" มีบิลอยู่ ${custBets.length} รายการ — ลบได้แต่บิลจะยังเก็บเบอร์ไว้\\n\\nยืนยันลบข้อมูลลูกค้า?`)) return;
     } else {
         if (!confirm(`ลบลูกค้า "${phone}"?`)) return;
     }
+
+    const old = cloudCustomers;
     cloudCustomers = cloudCustomers.filter(c => c.phone !== phone);
-    saveCustomers();
+
+    if (cloudReady) {
+        const ok = await deleteCloudRow('fivem_customers', phone);
+        if (!ok) {
+            cloudCustomers = old;
+            renderCustomerTable();
+            return;
+        }
+    }
     renderCustomerTable();
     populatePlayerDatalist();
 }
@@ -1812,7 +1977,11 @@ function exportSummaryToExcel() {
 // ===== 🚀 เริ่มระบบ: โหลดจากคลาวด์ก่อนแล้วค่อยเช็ค session =====
 // ============================================================
 (async function startup() {
-    await loadAllFromCloud();
+    const loaded = await loadAllFromCloud();
+    if (!loaded) {
+        // ห้าม migrate หรือ sync อะไรต่อ เพราะอาจทำให้ข้อมูลบน cloud ถูกทับ
+        return;
+    }
     await migrateLocalToCloud();
     if (checkSession()) showMainApp();
 })();

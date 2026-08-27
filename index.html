@@ -373,8 +373,11 @@ create policy "open_customers" on fivem_customers for all to anon, authenticated
             <div><label>วันที่แข่ง</label><br><input type="date" id="masterDate"></div>
             <div><label>เวลาแข่ง</label><br><input type="time" id="masterTime"></div>
             <div><label>ชื่อคู่บอล</label><br><input type="text" id="masterMatchName" placeholder="เช่น ลิเวอร์พูล-อาร์เซนอล" style="width: 250px;"></div>
-            <div><label>ทีมเต็ง 1</label><br><input type="text" id="masterTeam1" placeholder="เช่น ลิเวอร์พูล" style="width: 150px;"></div>
-            <div><label>ทีมเต็ง 2</label><br><input type="text" id="masterTeam2" placeholder="เช่น อาร์เซนอล" style="width: 150px;"></div>
+            <div><label>ทีม 1</label><br><input type="text" id="masterTeam1" placeholder="เช่น มาดริด" style="width: 150px;"></div>
+            <div><label>ราคาทีม 1</label><br><input type="text" id="masterPrice1" list="priceList" placeholder="เช่น 0.5" style="width: 100px;"></div>
+            <div><label>ทีม 2</label><br><input type="text" id="masterTeam2" placeholder="เช่น บาร์เซโลนา" style="width: 150px;"></div>
+            <div><label>ราคาทีม 2</label><br><input type="text" id="masterPrice2" list="priceList" placeholder="เช่น -0.5" style="width: 100px;"></div>
+            <div><label>ค่าน้ำเริ่มต้น</label><br><input type="number" id="masterWinOdds" step="0.01" placeholder="1.8" style="width: 90px;"></div>
             <button onclick="addMasterMatch()">เพิ่มคู่บอล</button>
         </div>
         <div style="margin-top:15px; text-align:center; padding:12px; background:#1a1d24; border-radius:8px; border:1px dashed #3a3f4b;">
@@ -383,7 +386,7 @@ create policy "open_customers" on fivem_customers for all to anon, authenticated
             <p class="note-text" style="margin-top:8px; margin-bottom:0;">* กดปุ่มแล้วรอ 3-10 วินาที (ดึงทุกลีกทั้งหมดในโลก ในครั้งเดียว) | ต้องเลือกวันที่ก่อนกด</p>
         </div>
         <table style="margin-top: 15px;">
-            <thead><tr><th>วันที่</th><th>เวลา</th><th>ลีก / คู่บอล</th><th>สถานะ</th><th>จัดการ</th></tr></thead>
+            <thead><tr><th>วันที่</th><th>เวลา</th><th>ลีก / คู่บอล</th><th>ราคา</th><th>ค่าน้ำ</th><th>สถานะ</th><th>จัดการ</th></tr></thead>
             <tbody id="masterMatchTableBody"></tbody>
         </table>
     </div>
@@ -408,7 +411,7 @@ create policy "open_customers" on fivem_customers for all to anon, authenticated
             <div><label>วันที่</label><br><input type="date" id="betDate"></div>
             <div><label>เบอร์ลูกค้า</label><br><input type="text" id="playerName" list="playerList" placeholder="เช่น 0812345678"><datalist id="playerList"></datalist><datalist id="priceList"><option value="0"></option><option value="0/0.5"></option><option value="0.5"></option><option value="0.5/1"></option><option value="1"></option><option value="1/1.5"></option><option value="1.5"></option><option value="1.5/2"></option><option value="2"></option><option value="2/2.5"></option><option value="2.5"></option></datalist></div>
             <div><label>ประเภท</label><br><select id="betType" onchange="toggleStepMenu()"><option value="single">บอลเต็ง</option><option value="step">บอลสเต็ป</option></select></div>
-            <div id="singleTeamWrapper"><label>ทีมที่แทง (เต็ง)</label><br><select id="singleTeam"><option value="">-- กรุณาเพิ่มคู่บอล --</option></select></div>
+            <div id="singleTeamWrapper"><label>ทีมที่แทง (เต็ง)</label><br><select id="singleTeam" onchange="updateSingleTeamPrice()"><option value="">-- กรุณาเพิ่มคู่บอล --</option></select></div>
             <div id="singlePriceWrapper"><label>ราคาบอล</label><br><input type="text" id="singlePrice" list="priceList" placeholder="เช่น 0.5, 0/0.5, 1/1.5"></div>
             <div><label>ยอดแทง</label><br><input type="number" id="stake" placeholder="เช่น 100"></div>
             <div><label>ค่าน้ำบิลนี้</label><br><select id="betOdds"><option value="">ใช้ค่าทั่วไป</option><option value="1.9">1.9</option><option value="1.85">1.85</option><option value="1.8">1.8</option><option value="1.7">1.7</option><option value="1.6">1.6</option></select></div>
@@ -418,7 +421,7 @@ create policy "open_customers" on fivem_customers for all to anon, authenticated
             <label><b>รายการบอลในสเต็ป:</b></label><br>
             <div style="display:flex; gap:10px; margin-top:10px; align-items:flex-end;">
                 <div style="flex:2;"><label>เลือกคู่บอล</label><br><select id="matchNameSelect" style="width:100%;" onchange="updateTeamDropdownForStep()"></select></div>
-                <div style="flex:1;"><label>ทีมที่แทง</label><br><select id="matchTeamSelect" style="width:100%;"></select></div>
+                <div style="flex:1;"><label>ทีมที่แทง</label><br><select id="matchTeamSelect" style="width:100%;" onchange="updateStepTeamPrice()"></select></div>
                 <div style="flex:1;"><label>ราคาบอล</label><br><input type="text" id="matchPriceInput" list="priceList" style="width:100%;" placeholder="เช่น 0.5, 0/0.5"></div>
                 <button onclick="addMatch()">เพิ่มคู่</button>
             </div>
@@ -939,18 +942,60 @@ async function fetchMatchesFromAPI() {
 // ============================================================
 // ===== จัดการคู่บอลประจำวัน =====
 // ============================================================
+function getMasterTeamPrice(match, team) {
+    if (!match || !team) return '';
+    if (Array.isArray(match.teamPrices)) {
+        const idx = match.teams.indexOf(team);
+        if (idx >= 0) return match.teamPrices[idx] || '';
+    }
+    if (match.prices && typeof match.prices === 'object') return match.prices[team] || '';
+    return '';
+}
+
+function getMasterWinOdds(match) {
+    const v = match && (match.defaultWinOdds || match.winOdds);
+    return v ? String(v) : '';
+}
+
 function addMasterMatch() {
     const date = document.getElementById('masterDate').value;
     const time = document.getElementById('masterTime').value;
     const name = document.getElementById('masterMatchName').value.trim();
     const team1 = document.getElementById('masterTeam1').value.trim();
     const team2 = document.getElementById('masterTeam2').value.trim();
+    const price1 = document.getElementById('masterPrice1').value.trim();
+    const price2 = document.getElementById('masterPrice2').value.trim();
+    const defaultWinOdds = parseFloat(document.getElementById('masterWinOdds').value);
     if (!date || !time || !name || !team1 || !team2) { alert('กรุณากรอกข้อมูลคู่บอลให้ครบทุกช่อง'); return; }
-    matchesMasterList.push({ id: Date.now(), date, time, name, teams: [team1, team2], locked: false });
+    matchesMasterList.push({
+        id: Date.now(), date, time, name, teams: [team1, team2],
+        teamPrices: [price1, price2],
+        defaultWinOdds: Number.isFinite(defaultWinOdds) ? defaultWinOdds : settings.winOdds,
+        locked: false
+    });
     saveMatches();
-    document.getElementById('masterMatchName').value = '';
-    document.getElementById('masterTeam1').value = '';
-    document.getElementById('masterTeam2').value = '';
+    ['masterMatchName','masterTeam1','masterTeam2','masterPrice1','masterPrice2','masterWinOdds'].forEach(id => { document.getElementById(id).value = ''; });
+    renderMasterMatches();
+    updateBetFormDropdowns();
+}
+
+function editMasterMatch(id) {
+    if (!isAdmin()) return;
+    const m = matchesMasterList.find(x => x.id == id);
+    if (!m) return;
+    const p1 = getMasterTeamPrice(m, m.teams[0]);
+    const p2 = getMasterTeamPrice(m, m.teams[1]);
+    const w = getMasterWinOdds(m) || settings.winOdds;
+    const newP1 = prompt(`ราคา ${m.teams[0]}`, p1);
+    if (newP1 === null) return;
+    const newP2 = prompt(`ราคา ${m.teams[1]}`, p2);
+    if (newP2 === null) return;
+    const newW = prompt('ค่าน้ำเริ่มต้นของคู่นี้', w);
+    if (newW === null) return;
+    m.teamPrices = [newP1.trim(), newP2.trim()];
+    const parsedW = parseFloat(newW);
+    m.defaultWinOdds = Number.isFinite(parsedW) ? parsedW : settings.winOdds;
+    saveMatches();
     renderMasterMatches();
     updateBetFormDropdowns();
 }
@@ -982,7 +1027,10 @@ function renderMasterMatches() {
     const sorted = [...matchesMasterList].sort((a,b) => new Date(a.date + ' ' + a.time) - new Date(b.date + ' ' + b.time));
     sorted.forEach(m => {
         const leagueInfo = m.league ? `<br><span style="color:#ff9800; font-size:11px;">${m.league}</span>` : '';
-        tbody.innerHTML += `<tr><td>${m.date}</td><td>${m.time}</td><td>${m.name}${leagueInfo} ( ${m.teams[0]} / ${m.teams[1]} )</td><td style="color:${m.locked ? '#f44336' : '#4caf50'}; font-weight:bold;">${m.locked ? 'ปิดรับ' : 'เปิดรับ'}</td><td><button class="${m.locked ? 'unlock-btn' : 'lock-btn'}" onclick="toggleLockMatch(${m.id})">${m.locked ? 'เปิดรับ' : 'ปิดรับ'}</button> <button class="danger" onclick="deleteMasterMatch(${m.id})">ลบ</button></td></tr>`;
+        const p1 = getMasterTeamPrice(m, m.teams[0]) || '-';
+        const p2 = getMasterTeamPrice(m, m.teams[1]) || '-';
+        const water = getMasterWinOdds(m) || '-';
+        tbody.innerHTML += `<tr><td>${m.date}</td><td>${m.time}</td><td>${m.name}${leagueInfo} ( ${m.teams[0]} / ${m.teams[1]} )</td><td style="font-size:12px;">${m.teams[0]}: <b>${p1}</b><br>${m.teams[1]}: <b>${p2}</b></td><td style="color:#ff9800; font-weight:bold;">${water}</td><td style="color:${m.locked ? '#f44336' : '#4caf50'}; font-weight:bold;">${m.locked ? 'ปิดรับ' : 'เปิดรับ'}</td><td><button class="edit-btn" onclick="editMasterMatch(${m.id})">แก้ราคา/น้ำ</button> <button class="${m.locked ? 'unlock-btn' : 'lock-btn'}" onclick="toggleLockMatch(${m.id})">${m.locked ? 'เปิดรับ' : 'ปิดรับ'}</button> <button class="danger" onclick="deleteMasterMatch(${m.id})">ลบ</button></td></tr>`;
     });
 }
 
@@ -993,10 +1041,34 @@ function updateBetFormDropdowns() {
     stepMatchSelect.innerHTML = '<option value="">-- เลือกคู่บอล --</option>';
     matchesMasterList.filter(m => !m.locked).forEach(m => {
         const leagueTag = m.league ? ` [${m.league}]` : '';
-        m.teams.forEach(team => { singleSelect.innerHTML += `<option value="${team}">${team} (${m.time})${leagueTag}</option>`; });
+        m.teams.forEach(team => {
+            const price = getMasterTeamPrice(m, team);
+            const water = getMasterWinOdds(m);
+            singleSelect.innerHTML += `<option value="${team}" data-match-id="${m.id}" data-price="${price}" data-water="${water}">${team} (${m.time})${leagueTag}${price ? ` | ราคา ${price}` : ''}</option>`;
+        });
         stepMatchSelect.innerHTML += `<option value="${m.id}">${m.name} (${m.time})${leagueTag}</option>`;
     });
     updateTeamDropdownForStep();
+}
+
+function updateSingleTeamPrice() {
+    const select = document.getElementById('singleTeam');
+    const opt = select.options[select.selectedIndex];
+    const price = opt ? (opt.dataset.price || '') : '';
+    const water = opt ? (opt.dataset.water || '') : '';
+    const priceInput = document.getElementById('singlePrice');
+    if (priceInput) priceInput.value = price;
+    const oddsInput = document.getElementById('betOdds');
+    if (oddsInput && !oddsInput.value && water) setBetOddsValue(water);
+}
+
+function setBetOddsValue(value) {
+    const select = document.getElementById('betOdds');
+    if (!select || !value) return;
+    if (![...select.options].some(o => o.value === String(value))) {
+        select.innerHTML += `<option value="${value}">${value}</option>`;
+    }
+    select.value = String(value);
 }
 
 function updateTeamDropdownForStep() {
@@ -1005,8 +1077,25 @@ function updateTeamDropdownForStep() {
     teamSelect.innerHTML = '<option value="">-- เลือกทีม --</option>';
     if (matchId) {
         const match = matchesMasterList.find(m => m.id == matchId);
-        if (match) { match.teams.forEach(team => { teamSelect.innerHTML += `<option value="${team}">${team}</option>`; }); }
+        if (match) {
+            match.teams.forEach(team => {
+                const price = getMasterTeamPrice(match, team);
+                teamSelect.innerHTML += `<option value="${team}" data-price="${price}" data-water="${getMasterWinOdds(match)}">${team}${price ? ` | ราคา ${price}` : ''}</option>`;
+            });
+        }
     }
+    const priceInput = document.getElementById('matchPriceInput');
+    if (priceInput) priceInput.value = '';
+}
+
+function updateStepTeamPrice() {
+    const select = document.getElementById('matchTeamSelect');
+    const opt = select.options[select.selectedIndex];
+    const priceInput = document.getElementById('matchPriceInput');
+    if (priceInput) priceInput.value = opt ? (opt.dataset.price || '') : '';
+    const water = opt ? (opt.dataset.water || '') : '';
+    const oddsInput = document.getElementById('betOdds');
+    if (oddsInput && !oddsInput.value && water) setBetOddsValue(water);
 }
 
 function ensureSingleTeamOption(team) {
@@ -1033,11 +1122,12 @@ function addMatch() {
     const matchId = matchSelect.value;
     const teamName = teamSelect.value;
     const priceInput = document.getElementById('matchPriceInput');
-    const price = priceInput ? priceInput.value.trim() : '';
+    let price = priceInput ? priceInput.value.trim() : '';
     if (!matchId || !teamName) { alert('กรุณาเลือกคู่บอลและทีมที่จะแทงให้ครบ'); return; }
     const matchData = matchesMasterList.find(m => m.id == matchId);
     if (matchData) {
-        currentMatches.push({ match: matchData.name, team: teamName, price: price, status: 'pending' });
+        if (!price) price = getMasterTeamPrice(matchData, teamName);
+        currentMatches.push({ match: matchData.name, team: teamName, price: price, status: 'pending', masterMatchId: matchData.id });
         renderMatchList();
         matchSelect.value = '';
         teamSelect.innerHTML = '<option value="">-- เลือกทีม --</option>';
@@ -1047,12 +1137,16 @@ function addMatch() {
 
 function removeMatch(index) { currentMatches.splice(index, 1); renderMatchList(); }
 
+function updateCurrentMatchPrice(index, value) {
+    if (!currentMatches[index]) return;
+    currentMatches[index].price = value.trim();
+}
+
 function renderMatchList() {
     const list = document.getElementById('matchList');
     list.innerHTML = '';
     currentMatches.forEach((m, index) => {
-        const priceText = m.price ? ` <span style="color:#ff9800;">[ราคา ${m.price}]</span>` : ' <span style="color:#777;">[ไม่ระบุราคา]</span>';
-        list.innerHTML += `<div class="match-tag"><span><b>${m.match}</b> (แทง: ${m.team})${priceText}</span><button class="danger" style="padding:2px 10px; font-size:12px;" onclick="removeMatch(${index})">ลบ</button></div>`;
+        list.innerHTML += `<div class="match-tag" style="align-items:center; gap:10px;"><span style="flex:2;"><b>${m.match}</b> (แทง: ${m.team})</span><input type="text" list="priceList" value="${m.price || ''}" placeholder="ราคา" style="width:100px;" onchange="updateCurrentMatchPrice(${index}, this.value)" oninput="updateCurrentMatchPrice(${index}, this.value)"><button class="danger" style="padding:2px 10px; font-size:12px;" onclick="removeMatch(${index})">ลบ</button></div>`;
     });
 }
 
@@ -1074,9 +1168,8 @@ function submitBet() {
     if (betType === 'single') {
         newBet.type = 'เต็ง';
         newBet.team = document.getElementById('singleTeam').value;
-        const singlePrice = document.getElementById('singlePrice') ? document.getElementById('singlePrice').value.trim() : '';
-        if (!newBet.team) { alert('กรุณาเลือกทีมที่จะแทง'); return; }
-        newBet.matches = [{ match: 'บอลเต็ง', team: newBet.team, price: singlePrice, status: 'pending' }];
+        const singleOpt = document.getElementById('singleTeam').options[document.getElementById('singleTeam').selectedIndex];
+        newBet.matches = [{ match: 'บอลเต็ง', team: newBet.team, price: singlePrice, status: 'pending', masterMatchId: singleOpt ? (singleOpt.dataset.matchId || null) : null }];
     } else {
         if (currentMatches.length < 2) { alert('บอลสเต็ปต้องมีอย่างน้อย 2 คู่'); return; }
         newBet.type = `สเต็ป ${currentMatches.length} คู่`;
@@ -1642,6 +1735,8 @@ function exportToExcel() {
         'รายการ': b.type,
         'ทีมที่แทง': b.matches.map(m => m.team).join(', '),
         'ยอดแทง': b.stake,
+        'ค่าน้ำ': b.winOdds || settings.winOdds,
+        'ราคาแต่ละคู่': b.matches.map(m => `${m.team}: ${m.price || '-'}`).join(' | '),
         'ยอดจ่ายสุทธิ': (b.status === 'win' || b.status === 'refund') ? parseFloat(b.payout) : 0,
         'สถานะ': BILL_STATUS_TEXT[b.status] || b.status,
         'รายละเอียดสเต็ป': JSON.stringify(b.matches)

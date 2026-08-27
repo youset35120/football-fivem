@@ -84,6 +84,11 @@ create policy "open_customers" on fivem_customers for all to anon, authenticated
         button.summary-excel-btn:hover { background: #00796b; }
         button.lock-btn { background: #9e9e9e; }
         button.unlock-btn { background: #8bc34a; }
+        button.paid-btn { background: #00a884; }
+        button.paid-btn:hover { background: #008f70; }
+        button.unpaid-btn { background: #ff9800; }
+        button.unpaid-btn:hover { background: #e68900; }
+        .paid-badge { color: #00e676; font-size: 12px; font-weight: bold; margin-top: 4px; }
         button.change-team-btn { background: #e91e63; }
         button.change-team-btn:hover { background: #c2185b; }
         button.logout-btn { background: #795548; }
@@ -358,10 +363,10 @@ create policy "open_customers" on fivem_customers for all to anon, authenticated
             <button onclick="addCustomer()">เพิ่มลูกค้า</button>
         </div>
         <table style="margin-top: 15px;">
-            <thead><tr><th>เบอร์โทร</th><th>ชื่อ</th><th>หมายเหตุ</th><th>จำนวนบิล</th><th>ยอดแทงรวม</th><th>จัดการ</th></tr></thead>
+            <thead><tr><th>เบอร์โทร</th><th>ชื่อ</th><th>หมายเหตุ</th><th>จำนวนบิล</th><th>ยอดแทงรวม</th><th>ยอดค้างจ่าย</th><th>จัดการ</th></tr></thead>
             <tbody id="customerTableBody"></tbody>
         </table>
-        <p class="note-text">* เบอร์โทรใช้เป็นรหัสลูกค้า — ใส่เบอร์เดียวกันในบิล ระบบจะจับคู่ให้อัตโนมัติ | บิลเก่าระบบสร้างลูกค้าให้อัตโนมัติ</p>
+        <p class="note-text">* เบอร์โทรใช้เป็นรหัสลูกค้า — ใส่เบอร์เดียวกันในบิล ระบบจะจับคู่ให้อัตโนมัติ | ยอดค้างจ่ายจะลดลงเมื่อกด “จ่ายเงินแล้ว”</p>
     </div>
 
 
@@ -396,6 +401,7 @@ create policy "open_customers" on fivem_customers for all to anon, authenticated
             <div class="box-item"><h3>ยอดจ่ายรวม</h3><div class="num" id="totalPayout">0</div></div>
             <div class="box-item"><h3>ยอดคืนทุน</h3><div class="num refund-color" id="totalRefund">0</div></div>
             <div class="box-item"><h3>กำไร / ขาดทุนสุทธิ</h3><div class="num" id="totalProfit">0</div></div>
+            <div class="box-item"><h3>ยอดค้างจ่ายรวม</h3><div class="num" style="color:#ff9800;" id="totalPending">0</div></div>
         </div>
     </div>
 
@@ -480,7 +486,7 @@ create policy "open_customers" on fivem_customers for all to anon, authenticated
     <div class="card">
         <h2>👤 สรุปยอดแยกตามรายบุคคล (เบอร์ลูกค้า)</h2>
         <table>
-            <thead><tr><th>เบอร์ลูกค้า</th><th>ยอดแทงรวม</th><th>ยอดจ่ายรวม</th><th>ยอดคืนทุน</th><th>กำไร/ขาดทุน (เจ้ามือ)</th></tr></thead>
+            <thead><tr><th>เบอร์ลูกค้า</th><th>ยอดแทงรวม</th><th>ยอดจ่ายรวม</th><th>ยอดคืนทุน</th><th>ค้างจ่าย</th><th>กำไร/ขาดทุน (เจ้ามือ)</th></tr></thead>
             <tbody id="playerSummaryTableBody"></tbody>
         </table>
     </div>
@@ -1061,7 +1067,7 @@ function submitBet() {
     if (betType === 'step' && settings.maxStep > 0 && stake > settings.maxStep) { alert(`ยอดแทงบอลสเต็ปเกินกำหนด (สูงสุด ${settings.maxStep})`); return; }
 
     const betOddsVal = document.getElementById('betOdds').value;
-    let newBet = { id: editId ? parseInt(editId) : Date.now(), date, player: playerName, betType, stake, status: 'pending', payout: 0 };
+    let newBet = { id: editId ? parseInt(editId) : Date.now(), date, player: playerName, betType, stake, status: 'pending', payout: 0, paid: false };
     if (betOddsVal) newBet.winOdds = parseFloat(betOddsVal);
 
     if (betType === 'single') {
@@ -1096,7 +1102,14 @@ function submitBet() {
                     }
                 }
             });
+            const oldStatusBeforeEdit = oldBet.status;
+            const oldPayoutBeforeEdit = Number(oldBet.payout || 0);
             bets[betIndex] = { ...oldBet, ...newBet };
+            if (oldStatusBeforeEdit !== bets[betIndex].status || oldPayoutBeforeEdit !== Number(bets[betIndex].payout || 0)) {
+                bets[betIndex].paid = false;
+                delete bets[betIndex].paidAt;
+                delete bets[betIndex].paidBy;
+            }
         }
     } else { bets.push(newBet); }
     // สร้างลูกค้าอัตโนมัติถ้ายังไม่มี
@@ -1116,9 +1129,16 @@ function updateMatchStatus(betId, matchIndex, newStatus) {
     if (!isAdmin()) return;
     const bet = bets.find(b => b.id === betId);
     if (!bet) return;
+    const oldStatus = bet.status;
+    const oldPayout = Number(bet.payout || 0);
     bet.matches[matchIndex].status = newStatus;
     const result = calculatePayout(bet.betType, bet.stake, bet.matches, bet);
     bet.payout = result.payout; bet.status = result.status;
+    if (oldStatus !== bet.status || oldPayout !== Number(bet.payout || 0)) {
+        bet.paid = false;
+        delete bet.paidAt;
+        delete bet.paidBy;
+    }
     saveData(); renderTable();
 }
 
@@ -1191,8 +1211,15 @@ function confirmChangeTeam() {
     });
     if (anyChanged) {
         if (bet.betType === 'single' && bet.matches[0]) bet.team = bet.matches[0].team;
+        const oldStatus = bet.status;
+        const oldPayout = Number(bet.payout || 0);
         const result = calculatePayout(bet.betType, bet.stake, bet.matches, bet);
         bet.payout = result.payout; bet.status = result.status;
+        if (oldStatus !== bet.status || oldPayout !== Number(bet.payout || 0)) {
+            bet.paid = false;
+            delete bet.paidAt;
+            delete bet.paidBy;
+        }
         saveData(); renderTable(); alert('✅ เปลี่ยนทีมเรียบร้อยแล้ว!');
     } else { alert('ไม่มีการเปลี่ยนแปลงทีม'); }
     closeChangeTeamModal();
@@ -1221,11 +1248,18 @@ function confirmEditStake() {
     const newStake = parseFloat(document.getElementById('editStakeInput').value);
     const newOdds = document.getElementById('editOddsInput').value;
     if (!newStake || newStake <= 0) { alert('กรุณาใส่ยอดแทงที่ถูกต้อง'); return; }
+    const oldStatus = bet.status;
+    const oldPayout = Number(bet.payout || 0);
     bet.stake = newStake;
     if (newOdds) bet.winOdds = parseFloat(newOdds);
     else delete bet.winOdds;
     const result = calculatePayout(bet.betType, bet.stake, bet.matches, bet);
     bet.payout = result.payout; bet.status = result.status;
+    if (oldStatus !== bet.status || oldPayout !== Number(bet.payout || 0)) {
+        bet.paid = false;
+        delete bet.paidAt;
+        delete bet.paidBy;
+    }
     saveData(); renderTable();
     document.getElementById('editStakeModal').style.display = 'none';
 }
@@ -1287,6 +1321,10 @@ function copySlip(id) {
     if (bet.status === 'win') slipText += `ยอดจ่าย: ${bet.payout} บาท`;
     else if (bet.status === 'refund') slipText += `ยอดคืนทุน: ${bet.payout} บาท`;
     else slipText += `ยอดจ่าย: -`;
+    if (bet.status === 'win' || bet.status === 'refund') {
+        slipText += `\nสถานะการเงิน: ${bet.paid ? 'จ่ายเงินแล้ว' : 'ยังไม่จ่าย'}`;
+        if (bet.paidAt) slipText += `\nเวลาจ่าย: ${new Date(bet.paidAt).toLocaleString('th-TH')}`;
+    }
     navigator.clipboard.writeText(slipText).then(() => { alert('คัดลอกสลิปไปยังคลิปบอร์ดแล้ว!'); }).catch(() => {
         const ta = document.createElement('textarea'); ta.value = slipText; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); alert('คัดลอกสลิปแล้ว!');
     });
@@ -1306,9 +1344,40 @@ function cancelEdit() {
     document.getElementById('cancelBtn').style.display = 'none';
 }
 
+function togglePaid(id) {
+    if (!isAdmin()) return;
+    const bet = bets.find(b => b.id === id);
+    if (!bet) return;
+
+    // จ่ายเงินได้เฉพาะบิลที่ผลออกและมียอดจ่าย/คืนทุน
+    if (!['win', 'refund'].includes(bet.status)) {
+        alert('บิลนี้ยังไม่สามารถจ่ายเงินได้ เพราะผลยังไม่ออกหรือบิลเสีย');
+        return;
+    }
+
+    if (bet.paid) {
+        if (!confirm(`ยืนยันยกเลิกสถานะ "จ่ายเงินแล้ว" ของบิล ${bet.player} ยอด ${Number(bet.payout || 0).toFixed(2)} บาท?`)) return;
+        bet.paid = false;
+        delete bet.paidAt;
+        delete bet.paidBy;
+    } else {
+        if (!confirm(`ยืนยันว่าจ่ายเงินให้ลูกค้า ${bet.player} จำนวน ${Number(bet.payout || 0).toFixed(2)} บาทแล้วใช่ไหม?`)) return;
+        bet.paid = true;
+        bet.paidAt = new Date().toISOString();
+        bet.paidBy = currentUser ? (currentUser.name || currentUser.username) : 'admin';
+    }
+
+    saveData();
+    renderTable();
+}
+
 function deleteBet(id) {
     if (!isAdmin()) return;
-    if (confirm('ต้องการลบรายการนี้ใช่ไหม?')) { bets = bets.filter(b => b.id !== id); saveData(); renderTable(); }
+    if (confirm('ต้องการลบรายการนี้ใช่ไหม?')) {
+        bets = bets.filter(b => b.id !== id);
+        saveData();
+        renderTable();
+    }
 }
 
 function clearAllData() {
@@ -1322,6 +1391,7 @@ function clearAllData() {
 // ===== ฟิลเตอร์ / ตารางหลัก =====
 // ============================================================
 const BILL_STATUS_TEXT = { pending: 'รอผล', win: 'ได้', lose: 'เสีย', refund: 'คืนทุน' };
+const PAYMENT_STATUS_TEXT = { unpaid: 'ยังไม่จ่าย', paid: 'จ่ายแล้ว' };
 const MATCH_STATUS_TEXT = { pending: 'รอผล', win: 'ได้', half_win: 'ได้ครึ่ง', half_loss: 'เสียครึ่ง', refund: 'คืนทุน', lose: 'เสีย' };
 const THAI_TO_STATUS = { 'รอผล': 'pending', 'ได้': 'win', 'เสีย': 'lose', 'คืนทุน': 'refund', 'ได้ครึ่ง': 'half_win', 'เสียครึ่ง': 'half_loss' };
 
@@ -1420,16 +1490,26 @@ function renderCustomerTable() {
     const tb = document.getElementById('customerTableBody');
     tb.innerHTML = '';
     if (!cloudCustomers.length) {
-        tb.innerHTML = '<tr><td colspan="6" style="color:#888;">ยังไม่มีลูกค้า — เพิ่มเองหรือสร้างบิลแทงแล้วระบบจะบันทึกให้อัตโนมัติ</td></tr>';
+        tb.innerHTML = '<tr><td colspan="7" style="color:#888;">ยังไม่มีลูกค้า — เพิ่มเองหรือสร้างบิลแทงแล้วระบบจะบันทึกให้อัตโนมัติ</td></tr>';
         return;
     }
     const sorted = [...cloudCustomers].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     sorted.forEach(c => {
         const custBets = bets.filter(b => b.player === c.phone);
         const billCount = custBets.length;
-        const totalStake = custBets.reduce((sum, b) => sum + b.stake, 0);
+        const totalStake = custBets.reduce((sum, b) => sum + (Number(b.stake) || 0), 0);
+        const pendingPayout = custBets.reduce((sum, b) => {
+            if ((b.status === 'win' || b.status === 'refund') && !b.paid) return sum + (Number(b.payout) || 0);
+            return sum;
+        }, 0);
         const act = `<button class="danger" style="padding:5px 12px;font-size:13px;" onclick="deleteCustomer('${c.phone}')">ลบ</button>`;
-        tb.innerHTML += `<tr><td><b>${c.phone}</b></td><td>${c.name || '-'}</td><td style="font-size:12px; color:#aaa;">${c.notes || '-'}</td><td>${billCount}</td><td>${totalStake.toFixed(2)}</td><td>${act}</td></tr>`;
+        tb.innerHTML += `<tr>
+            <td><b>${c.phone}</b></td><td>${c.name || '-'}</td>
+            <td style="font-size:12px; color:#aaa;">${c.notes || '-'}</td>
+            <td>${billCount}</td><td>${totalStake.toFixed(2)}</td>
+            <td style="color:${pendingPayout > 0 ? '#ff9800' : '#00e676'}; font-weight:bold;">${pendingPayout.toFixed(2)}</td>
+            <td>${act}</td>
+        </tr>`;
     });
 }
 
@@ -1491,21 +1571,38 @@ function renderTable() {
             return `<div class="match-row">${label}<span class="status-${m.status}">${MATCH_STATUS_TEXT[m.status] || m.status}</span></div>`;
         }).join('');
 
-        const payoutText = (b.status === 'win' || b.status === 'refund') ? Number(b.payout).toFixed(2) : '-';
+        const payoutValue = Number(b.payout || 0);
+        const payoutText = (b.status === 'win' || b.status === 'refund') ? payoutValue.toFixed(2) : '-';
         const statusCell = `<span class="status-${b.status}">${BILL_STATUS_TEXT[b.status] || b.status}</span>`;
+        const paymentBadge = (b.status === 'win' || b.status === 'refund')
+            ? `<div class="${b.paid ? 'paid-badge' : 'status-pending'}">${b.paid ? '✓ จ่ายเงินแล้ว' : '⏳ รอจ่ายเงิน'}</div>`
+            : '';
         const oddsBadge = b.winOdds ? `<div style="color:#ff9800; font-size:11px; margin-top:4px;">💧 น้ำ ${b.winOdds}</div>` : '';
+
+        let paymentButton = '';
+        if (b.status === 'win' || b.status === 'refund') {
+            paymentButton = b.paid
+                ? `<button class="unpaid-btn" onclick="togglePaid(${b.id})">↩ ยกเลิกจ่าย</button>`
+                : `<button class="paid-btn" onclick="togglePaid(${b.id})">💸 จ่ายเงินแล้ว</button>`;
+        }
+
         const actionCell = isAdmin() ? `<div class="action-btns">
             <button class="edit-btn" onclick="editBet(${b.id})">แก้ไข</button>
             <button class="duplicate-btn" onclick="duplicateBet(${b.id})">คัดลอก</button>
             <button class="slip-btn" onclick="copySlip(${b.id})">สลิป</button>
             <button class="change-team-btn" onclick="openChangeTeamModal(${b.id})">🔄</button>
             <button class="lock-btn" onclick="editStake(${b.id})">💰แก้ยอด</button>
-            <button class="danger" onclick="deleteBet(${b.id})">ลบ</button></div>${oddsBadge}` : oddsBadge;
+            ${paymentButton}
+            <button class="danger" onclick="deleteBet(${b.id})">ลบ</button></div>${oddsBadge}` : `${paymentBadge}${oddsBadge}`;
 
         tbody.innerHTML += `<tr>
             <td>${b.date}</td><td>${b.player}</td>
             <td><div style="font-size:13px; color:#aaa; margin-bottom:5px;">${b.type}</div><div class="matches-display">${matchesHtml}</div></td>
-            <td>${b.stake.toFixed(2)}</td><td>${payoutText}</td><td>${statusCell}</td><td>${actionCell}</td></tr>`;
+            <td>${Number(b.stake || 0).toFixed(2)}</td>
+            <td>${payoutText}${paymentBadge}</td>
+            <td>${statusCell}</td>
+            <td>${actionCell}</td>
+        </tr>`;
     });
 
     if (!filtered.length) tbody.innerHTML = '<tr><td colspan="7" style="color:#888;">ไม่พบรายการ</td></tr>';
@@ -1514,22 +1611,26 @@ function renderTable() {
     renderDailySummary();
     renderTeamSummary();
     renderPlayerSummary();
+    if (document.getElementById('customerMgmtCard')?.style.display !== 'none') renderCustomerTable();
 }
 
 // ============================================================
 // ===== สรุปยอด =====
 // ============================================================
 function updateSummary() {
-    let stake = 0, payout = 0, refund = 0;
+    let stake = 0, payout = 0, refund = 0, pending = 0;
     bets.forEach(b => {
-        stake += b.stake;
-        if (b.status === 'win') payout += parseFloat(b.payout) || 0;
-        if (b.status === 'refund') refund += parseFloat(b.payout) || 0;
+        stake += Number(b.stake) || 0;
+        if (b.status === 'win') payout += Number(b.payout) || 0;
+        if (b.status === 'refund') refund += Number(b.payout) || 0;
+        if ((b.status === 'win' || b.status === 'refund') && !b.paid) pending += Number(b.payout) || 0;
     });
     const profit = (stake - refund) - payout;
     document.getElementById('totalStake').innerText = stake.toFixed(2);
     document.getElementById('totalPayout').innerText = payout.toFixed(2);
     document.getElementById('totalRefund').innerText = refund.toFixed(2);
+    const pendingEl = document.getElementById('totalPending');
+    if (pendingEl) pendingEl.innerText = pending.toFixed(2);
     const pf = document.getElementById('totalProfit');
     pf.innerText = (profit >= 0 ? '+' : '') + profit.toFixed(2);
     pf.className = 'num ' + (profit >= 0 ? 'profit' : 'loss');
@@ -1545,15 +1646,16 @@ function getDailyStats() {
     const byDate = {};
     bets.forEach(b => { if (!byDate[b.date]) byDate[b.date] = []; byDate[b.date].push(b); });
     return Object.keys(byDate).sort().reverse().map(date => {
-        let stake = 0, payout = 0, refund = 0;
+        let stake = 0, payout = 0, refund = 0, pending = 0;
         const oppTeams = new Set();
         byDate[date].forEach(b => {
             stake += b.stake;
             if (b.status === 'win') payout += parseFloat(b.payout) || 0;
             if (b.status === 'refund') refund += parseFloat(b.payout) || 0;
+            if ((b.status === 'win' || b.status === 'refund') && !b.paid) pending += parseFloat(b.payout) || 0;
             b.matches.forEach(m => oppTeams.add(getOpponentTeam(m.team)));
         });
-        return { date, teams: [...oppTeams].join(', '), stake, payout, refund, profit: (stake - refund) - payout };
+        return { date, teams: [...oppTeams].join(', '), stake, payout, refund, pending, profit: (stake - refund) - payout };
     });
 }
 
@@ -1626,6 +1728,9 @@ function exportToExcel() {
         'ยอดแทง': b.stake,
         'ยอดจ่ายสุทธิ': (b.status === 'win' || b.status === 'refund') ? parseFloat(b.payout) : 0,
         'สถานะ': BILL_STATUS_TEXT[b.status] || b.status,
+        'สถานะการจ่ายเงิน': (b.status === 'win' || b.status === 'refund') ? (b.paid ? 'จ่ายแล้ว' : 'ยังไม่จ่าย') : '-',
+        'เวลาจ่ายเงิน': b.paidAt ? new Date(b.paidAt).toLocaleString('th-TH') : '',
+        'ผู้จ่าย': b.paidBy || '',
         'รายละเอียดสเต็ป': JSON.stringify(b.matches)
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
@@ -1648,6 +1753,7 @@ function importFromExcel(event) {
                 let matches;
                 try { matches = JSON.parse(r['รายละเอียดสเต็ป'] || '[]'); } catch (err) { matches = []; }
                 const status = THAI_TO_STATUS[r['สถานะ']] || 'pending';
+                const importedPaid = String(r['สถานะการจ่ายเงิน'] || '').trim() === 'จ่ายแล้ว';
                 if (!matches.length) {
                     matches = [{ match: 'บอลเต็ง', team: String(r['ทีมที่แทง'] || ''), status }];
                 }
@@ -1660,6 +1766,9 @@ function importFromExcel(event) {
                     stake: Number(r['ยอดแทง'] || 0),
                     status: status,
                     payout: Number(r['ยอดจ่ายสุทธิ'] || 0),
+                    paid: importedPaid,
+                    paidAt: r['เวลาจ่ายเงิน'] ? String(r['เวลาจ่ายเงิน']) : undefined,
+                    paidBy: r['ผู้จ่าย'] ? String(r['ผู้จ่าย']) : undefined,
                     type: r['รายการ'] || (betType === 'single' ? 'เต็ง' : `สเต็ป ${matches.length} คู่`),
                     matches: matches
                 };

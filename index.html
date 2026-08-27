@@ -15,6 +15,7 @@ create table fivem_matches (id text primary key, data jsonb not null);
 create table fivem_settings (id text primary key, data jsonb not null);
 create table fivem_users (id text primary key, data jsonb not null);
 create table fivem_customers (id text primary key, data jsonb not null);
+-- หมายเหตุ: ถ้ายังไม่มีตารางนี้ ระบบยังเปิดได้ แต่ถ้าต้องการระบบจัดการลูกค้าให้รันคำสั่งด้านบน
 
 alter table fivem_bets enable row level security;
 alter table fivem_matches enable row level security;
@@ -757,17 +758,31 @@ async function loadAllFromCloud() {
     cloudLoadError = null;
 
     try {
-        const [betsRes, matchRes, setRes, userRes, custRes] = await Promise.all([
+        // ตารางหลักต้องอ่านได้จึงจะถือว่า Cloud พร้อมใช้งาน
+        const [betsRes, matchRes, setRes, userRes] = await Promise.all([
             sb.from('fivem_bets').select('id, data').order('id'),
             sb.from('fivem_matches').select('id, data').order('id'),
             sb.from('fivem_settings').select('data').eq('id', 'main').maybeSingle(),
-            sb.from('fivem_users').select('id, data'),
-            sb.from('fivem_customers').select('id, data')
+            sb.from('fivem_users').select('id, data')
         ]);
 
-        // สำคัญ: ถ้าอ่านข้อมูลไม่ได้ ห้ามตั้ง array เป็น [] และห้าม sync/delete อะไรทั้งนั้น
-        const firstError = [betsRes, matchRes, setRes, userRes, custRes].find(r => r && r.error);
+        // สำคัญ: ถ้าอ่านตารางหลักไม่ได้ ห้ามตั้ง array เป็น [] และห้าม sync/delete อะไรทั้งนั้น
+        const firstError = [betsRes, matchRes, setRes, userRes].find(r => r && r.error);
         if (firstError?.error) throw firstError.error;
+
+        // fivem_customers เป็นตารางเสริม: ถ้ายังไม่ได้สร้าง ให้ระบบยังเปิดใช้งานข้อมูลบิลเก่าได้
+        let custRes = { data: [], error: null };
+        const customerResult = await sb.from('fivem_customers').select('id, data');
+        if (customerResult.error) {
+            const msg = customerResult.error.message || '';
+            if (msg.includes('fivem_customers') || msg.includes('schema cache') || customerResult.error.code === '42P01') {
+                console.warn('ไม่พบตาราง fivem_customers — ข้ามตารางลูกค้าและใช้ข้อมูลลูกค้าจากบิลแทน');
+            } else {
+                throw customerResult.error;
+            }
+        } else {
+            custRes = customerResult;
+        }
 
         bets = (betsRes.data || []).map(r => r.data).filter(Boolean);
         matchesMasterList = (matchRes.data || []).map(r => r.data).filter(Boolean);
@@ -1982,7 +1997,7 @@ function exportSummaryToExcel() {
         // ห้าม migrate หรือ sync อะไรต่อ เพราะอาจทำให้ข้อมูลบน cloud ถูกทับ
         return;
     }
-    await migrateLocalToCloud();
+    // ไม่ migrate localStorage อัตโนมัติหลังโหลด Cloud เพื่อป้องกันข้อมูล Cloud ถูกปะปน/เขียนทับ
     if (checkSession()) showMainApp();
 })();
 </script>

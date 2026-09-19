@@ -386,9 +386,9 @@ create policy "open_customers" on fivem_customers for all to anon, authenticated
             <button onclick="addMasterMatch()">เพิ่มคู่บอล</button>
         </div>
         <div style="margin-top:15px; text-align:center; padding:12px; background:#1a1d24; border-radius:8px; border:1px dashed #3a3f4b;">
-            <button class="excel-btn" onclick="fetchMatchesFromAPI()" id="fetchApiBtn">📥 ดึงคู่บอลวันนี้จาก API (ทุกลีกทั้งหมด)</button>
+            <button class="excel-btn" onclick="fetchMatchesFromGoal7()" id="fetchApiBtn">📥 ดึงคู่บอลจาก Goal7</button>
             <span id="fetchStatus" style="color:#ff9800; font-size:12px; margin-left:10px;"></span>
-            <p class="note-text" style="margin-top:8px; margin-bottom:0;">* กดปุ่มแล้วรอ 3-10 วินาที (ดึงทุกลีกทั้งหมดในโลก ในครั้งเดียว) | ต้องเลือกวันที่ก่อนกด</p>
+            <p class="note-text" style="margin-top:8px; margin-bottom:0;">* ดึงชื่อทีม / เวลา / ลีก / ราคาบอลจาก Goal7 | ราคาสามารถแก้เองได้ภายหลัง | ต้องเลือกวันที่ก่อนกด</p>
         </div>
         <table style="margin-top: 15px;">
             <thead><tr><th>วันที่</th><th>เวลา</th><th>ลีก / คู่บอล</th><th>ราคา</th><th>ค่าน้ำ</th><th>สถานะ</th><th>จัดการ</th></tr></thead>
@@ -416,8 +416,24 @@ create policy "open_customers" on fivem_customers for all to anon, authenticated
             <div><label>วันที่</label><br><input type="date" id="betDate"></div>
             <div><label>เบอร์ลูกค้า</label><br><input type="text" id="playerName" list="playerList" placeholder="เช่น 0812345678"><datalist id="playerList"></datalist><datalist id="priceList"><option value="0"></option><option value="0/0.5"></option><option value="0.5"></option><option value="0.5/1"></option><option value="1"></option><option value="1/1.5"></option><option value="1.5"></option><option value="1.5/2"></option><option value="2"></option><option value="2/2.5"></option><option value="2.5"></option></datalist></div>
             <div><label>ประเภท</label><br><select id="betType" onchange="toggleStepMenu()"><option value="single">บอลเต็ง</option><option value="step">บอลสเต็ป</option></select></div>
-            <div id="singleTeamWrapper"><label>ทีมที่แทง (เต็ง)</label><br><select id="singleTeam" onchange="updateSingleTeamPrice()"><option value="">-- กรุณาเพิ่มคู่บอล --</option></select></div>
-            <div id="singlePriceWrapper"><label>ราคาบอล</label><br><input type="text" id="singlePrice" list="priceList" placeholder="เช่น 0.5, 0/0.5, 1/1.5"></div>
+            <div id="singleTeamWrapper" style="grid-column:1 / -1;">
+                <label>เลือกคู่บอล (เต็ง)</label><br>
+                <select id="singleMatchSelect" onchange="updateSingleTeamForSingle()" style="width:100%;">
+                    <option value="">-- เลือกคู่บอล --</option>
+                </select>
+                <div style="display:flex;gap:10px;margin-top:10px;align-items:flex-end;">
+                    <div style="flex:1;">
+                        <label>ทีมที่แทง</label><br>
+                        <select id="singleTeam" onchange="updateSingleTeamPrice()" style="width:100%;">
+                            <option value="">-- เลือกทีม --</option>
+                        </select>
+                    </div>
+                    <div style="flex:1;">
+                        <label>ราคาบอล</label><br>
+                        <input type="text" id="singlePrice" list="priceList" placeholder="ราคาจะเติมให้อัตโนมัติ" style="width:100%;">
+                    </div>
+                </div>
+            </div>
             <div><label>ยอดแทง</label><br><input type="number" id="stake" placeholder="เช่น 100"></div>
             <div><label>ค่าน้ำบิลนี้</label><br><select id="betOdds"><option value="">ใช้ค่าทั่วไป</option><option value="1.9">1.9</option><option value="1.85">1.85</option><option value="1.8">1.8</option><option value="1.7">1.7</option><option value="1.6">1.6</option></select></div>
             <div><br><button id="submitBtn" onclick="submitBet()">เพิ่มรายการ</button><button class="danger" id="cancelBtn" style="display:none;" onclick="cancelEdit()">ยกเลิก</button></div>
@@ -1009,78 +1025,144 @@ function saveSettings() {
 }
 
 // ============================================================
-// ===== 📥 ดึงคู่บอลจาก TheSportsDB API (ทุกลีกหลัก) =====
+// ===== 📥 ดึงคู่บอลจาก Goal7 =====
+// ===== Goal7 ใช้สำหรับดึง "คู่บอล" เท่านั้น — ราคาไม่ดึงมา =====
 // ============================================================
-const THE_SPORTS_DB_KEY = '3'; // Public test key — สมัครฟรีที่ thesportsdb.com ถ้าโดนจำกัด
+// ตั้งค่า URL ของเซิร์ฟเวอร์ Goal7 ที่เราสร้างในโฟลเดอร์ goal7-server
+// ถ้าเปิด HTML ผ่านเซิร์ฟเวอร์ตัวเดียวกัน ใช้ /api ได้เลย
+const GOAL7_API_BASE = 'http://localhost:3000';
 
-async function fetchMatchesFromAPI() {
+async function fetchMatchesFromGoal7() {
     if (!isAdmin()) return;
+
     const dateInput = document.getElementById('masterDate').value;
-    if (!dateInput) { alert('กรุณาเลือกวันที่แข่งก่อน'); return; }
-    
+    if (!dateInput) {
+        alert('กรุณาเลือกวันที่แข่งก่อน');
+        return;
+    }
+
     const btn = document.getElementById('fetchApiBtn');
     const status = document.getElementById('fetchStatus');
     btn.disabled = true;
     btn.style.opacity = '0.5';
-    btn.innerText = '⏳ กำลังดึง...';
-    let added = 0, skipped = 0;
-    status.innerText = 'กำลังดึงคู่บอลทุกลีกทั้งหมด...';
-    
+    btn.innerText = '⏳ กำลังดึงคู่บอล + ราคา...';
+    status.innerText = 'กำลังอ่านชื่อทีม / เวลา / ลีก / ราคาบอลจาก Goal7...';
+
+    let added = 0;
+    let skipped = 0;
+
     try {
-        const url = `https://www.thesportsdb.com/api/v1/json/${THE_SPORTS_DB_KEY}/eventsday.php?d=${dateInput}&s=Soccer`;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-        
-        if (data && data.events) {
-            for (const ev of data.events) {
-                const home = (ev.strHomeTeam || '').trim();
-                const away = (ev.strAwayTeam || '').trim();
-                const league = (ev.strLeague || '').trim();
-                if (!home || !away || home === 'TBD' || away === 'TBD') continue;
-                
-                const exists = matchesMasterList.some(m => 
-                    m.date === dateInput && 
-                    ((m.teams[0] === home && m.teams[1] === away) || (m.teams[0] === away && m.teams[1] === home))
-                );
-                if (exists) { skipped++; continue; }
-                
-                let time = '00:00';
-                if (ev.strTimestamp) {
-                    const d = new Date(parseInt(ev.strTimestamp) * 1000);
-                    if (!isNaN(d.getTime())) {
-                        time = d.toLocaleTimeString('en-GB', { 
-                            hour: '2-digit', minute: '2-digit', 
-                            timeZone: 'Asia/Bangkok', hour12: false 
-                        });
-                    }
-                } else if (ev.strTime) {
-                    time = ev.strTime.substring(0, 5);
-                }
-                
-                matchesMasterList.push({
-                    id: Date.now() + Math.floor(Math.random() * 1000000),
-                    date: dateInput, time, name: `${home}-${away}`,
-                    teams: [home, away], league, locked: false
-                });
-                added++;
-            }
+        const base = GOAL7_API_BASE || '';
+        const url = `${base}/api/goal7/matches?date=${encodeURIComponent(dateInput)}`;
+        const res = await fetch(url, { cache: 'no-store' });
+        const raw = await res.text();
+
+        let data;
+        try {
+            data = JSON.parse(raw);
+        } catch (_) {
+            throw new Error('เซิร์ฟเวอร์ Goal7 ตอบกลับไม่ใช่ JSON — ตรวจว่าเปิด goal7-server อยู่');
         }
-    } catch (e) {
-        console.error('fetch error:', e);
-        btn.disabled = false; btn.style.opacity = '1';
-        btn.innerText = '📥 ดึงคู่บอลวันนี้จาก API (ทุกลีกทั้งหมด)';
+
+        if (!res.ok) {
+            throw new Error(data.message || data.error || `HTTP ${res.status}`);
+        }
+
+        if (!Array.isArray(data.matches)) {
+            throw new Error('รูปแบบข้อมูลจาก Goal7 ไม่ถูกต้อง');
+        }
+
+        for (const item of data.matches) {
+            const home = String(item.home || '').trim();
+            const away = String(item.away || '').trim();
+            const league = String(item.league || '').trim() || 'ไม่ระบุลีก';
+            const time = String(item.time || '00:00').substring(0, 5);
+            const goal7Price = String(item.goal7Price || '').trim();
+            const goal7Prices = Array.isArray(item.prices)
+                ? item.prices.map(p => String(p).trim()).filter(Boolean)
+                : [];
+
+            if (!home || !away) continue;
+
+            const exists = matchesMasterList.some(m =>
+                m.date === dateInput &&
+                ((m.teams?.[0] === home && m.teams?.[1] === away) ||
+                 (m.teams?.[0] === away && m.teams?.[1] === home))
+            );
+
+            if (exists) {
+                const existing = matchesMasterList.find(m =>
+                    m.date === dateInput &&
+                    ((m.teams?.[0] === home && m.teams?.[1] === away) ||
+                     (m.teams?.[0] === away && m.teams?.[1] === home))
+                );
+
+                // ถ้าคู่นี้มีอยู่แล้ว แต่ราคายังว่าง ให้เติมราคาจาก Goal7 ให้ทันที
+                const incomingPrice = goal7Price || goal7Prices[0] || '';
+                if (existing && incomingPrice) {
+                    const hasAnyPrice = Array.isArray(existing.teamPrices) &&
+                        existing.teamPrices.some(p => String(p || '').trim() !== '');
+
+                    if (!hasAnyPrice) {
+                        existing.teamPrices = [incomingPrice, incomingPrice];
+                        existing.goal7Price = incomingPrice;
+                        existing.goal7Prices = goal7Prices;
+                        existing.source = existing.source || 'goal7';
+                    }
+                }
+
+                skipped++;
+                continue;
+            }
+
+            // Goal7 ให้ราคาเป็นราคากลางของคู่บอล ไม่ได้แยกเป็นราคาทีมละช่อง
+            // จึงเก็บค่า Goal7 ไว้แยก และใส่ค่าเดียวกันเป็นค่าเริ่มต้นทั้ง 2 ฝั่ง
+            // แอดมินยังสามารถกด "แก้ราคา/น้ำ" เพื่อแก้แต่ละฝั่งเองได้
+            const initialPrice = goal7Price || goal7Prices[0] || '';
+
+            matchesMasterList.push({
+                id: Date.now() + Math.floor(Math.random() * 1000000),
+                date: dateInput,
+                time,
+                name: `${home}-${away}`,
+                teams: [home, away],
+                teamPrices: [initialPrice, initialPrice],
+                goal7Price: initialPrice,
+                goal7Prices,
+                defaultWinOdds: settings.winOdds,
+                league,
+                locked: false,
+                source: 'goal7'
+            });
+
+            added++;
+        }
+
+        saveMatches();
+        renderMasterMatches();
+        updateBetFormDropdowns();
+
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.innerText = '📥 ดึงคู่บอลจาก Goal7';
         status.innerText = '';
-        alert('❌ ดึงข้อมูลไม่สำเร็จ: ' + e.message + '\n\nถ้าเกิดบ่อยๆ สมัคร key ฟรีที่ thesportsdb.com แล้วแทนค่า THE_SPORTS_DB_KEY');
-        return;
+
+        alert(`✅ ดึงคู่บอลจาก Goal7 เสร็จแล้ว\n\n📅 วันที่: ${dateInput}\n🆕 เพิ่มใหม่: ${added} คู่\n⏭️ มีอยู่แล้ว: ${skipped} คู่\n\n💰 ราคาบอลจาก Goal7 ถูกใส่เป็นค่าเริ่มต้นแล้ว\n✏️ สามารถแก้ราคาแต่ละฝั่งได้ที่ "แก้ราคา/น้ำ"`);
+    } catch (e) {
+        console.error('Goal7 fetch error:', e);
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.innerText = '📥 ดึงคู่บอลจาก Goal7';
+        status.innerText = '';
+        alert('❌ ดึงข้อมูลจาก Goal7 ไม่สำเร็จ\n\n' + (e.message || e));
     }
-    
-    saveMatches(); renderMasterMatches(); updateBetFormDropdowns();
-    btn.disabled = false; btn.style.opacity = '1';
-    btn.innerText = '📥 ดึงคู่บอลวันนี้จาก API (ทุกลีกทั้งหมด)';
-    status.innerText = '';
-    alert(`✅ ดึงเสร็จเรียบร้อย\n\n📅 วันที่: ${dateInput}\n🆕 เพิ่มใหม่: ${added} คู่\n⏭️ มีอยู่แล้ว (ข้าม): ${skipped} คู่`);
 }
+
+// ฟังก์ชันเดิมเผื่อส่วนอื่นของไฟล์ยังเรียกชื่อเก่า
+function fetchMatchesFromAPI() {
+    return fetchMatchesFromGoal7();
+}
+
 // ============================================================
 // ===== จัดการคู่บอลประจำวัน =====
 // ============================================================
@@ -1174,39 +1256,153 @@ function toggleLockMatch(id) {
 }
 
 function renderMasterMatches() {
-    const tbody=document.getElementById('masterMatchTableBody');
-    tbody.innerHTML='';
-    const sorted=[...matchesMasterList].sort((a,b)=>new Date(a.date+' '+a.time)-new Date(b.date+' '+b.time));
-    sorted.forEach(m=>{
-        const leagueInfo=m.league?`<br><span style="color:#ff9800;font-size:11px;">${m.league}</span>`:'';
-        const p1=getMasterTeamPrice(m,m.teams[0])||''; const p2=getMasterTeamPrice(m,m.teams[1])||''; const water=getMasterWinOdds(m)||'';
-        const editing=masterEditingId==m.id;
-        const priceCell=editing
-          ? `<div style="display:grid;gap:6px;"><label style="font-size:11px;color:#aaa;">${m.teams[0]}</label><input class="master-inline-input" id="masterPrice1_${m.id}" value="${String(p1).replace(/&/g,'&amp;').replace(/"/g,'&quot;')}" placeholder="เช่น 0.5"><label style="font-size:11px;color:#aaa;">${m.teams[1]}</label><input class="master-inline-input" id="masterPrice2_${m.id}" value="${String(p2).replace(/&/g,'&amp;').replace(/"/g,'&quot;')}" placeholder="เช่น -0.5"></div>`
-          : `${m.teams[0]}: <b>${p1||'-'}</b><br>${m.teams[1]}: <b>${p2||'-'}</b>`;
-        const waterCell=editing?`<input class="master-inline-input" id="masterWater_${m.id}" type="number" step="0.01" value="${water}" placeholder="1.8">`:`<span style="color:#ff9800;font-weight:bold;">${water||'-'}</span>`;
-        const actions=editing
-          ? `<div class="master-edit-actions"><button class="master-save-btn" onclick="saveMasterInlineEdit(${m.id})">💾 บันทึก</button><button onclick="cancelMasterInlineEdit()">ยกเลิก</button></div>`
-          : `<button class="edit-btn" onclick="startMasterInlineEdit(${m.id})">✏️ แก้ราคา/น้ำ</button> <button class="${m.locked?'unlock-btn':'lock-btn'}" onclick="toggleLockMatch(${m.id})">${m.locked?'เปิดรับ':'ปิดรับ'}</button> <button class="danger" onclick="deleteMasterMatch(${m.id})">ลบ</button>`;
-        tbody.innerHTML+=`<tr><td>${m.date}</td><td>${m.time}</td><td>${m.name}${leagueInfo} ( ${m.teams[0]} / ${m.teams[1]} )</td><td style="font-size:12px;min-width:150px;">${priceCell}</td><td style="min-width:100px;">${waterCell}</td><td style="color:${m.locked?'#f44336':'#4caf50'};font-weight:bold;">${m.locked?'ปิดรับ':'เปิดรับ'}</td><td>${actions}</td></tr>`;
+    const tbody = document.getElementById('masterMatchTableBody');
+    tbody.innerHTML = '';
+
+    const sorted = [...matchesMasterList].sort((a, b) => {
+        const leagueA = String(a.league || 'ไม่ระบุลีก');
+        const leagueB = String(b.league || 'ไม่ระบุลีก');
+        if (leagueA !== leagueB) return leagueA.localeCompare(leagueB, 'th');
+        return new Date(a.date + ' ' + a.time) - new Date(b.date + ' ' + b.time);
+    });
+
+    let currentLeague = null;
+
+    sorted.forEach(m => {
+        const league = String(m.league || 'ไม่ระบุลีก');
+
+        if (league !== currentLeague) {
+            currentLeague = league;
+            tbody.innerHTML += `
+                <tr class="master-league-row">
+                    <td colspan="7" style="background:#20242c;color:#ff9800;font-weight:700;text-align:left;padding:10px 12px;border-top:2px solid #3a3f4b;">
+                        🏆 ${league}
+                    </td>
+                </tr>
+            `;
+        }
+
+        const p1 = getMasterTeamPrice(m, m.teams[0]) || '';
+        const p2 = getMasterTeamPrice(m, m.teams[1]) || '';
+        const water = getMasterWinOdds(m) || '';
+        const editing = masterEditingId == m.id;
+
+        const priceCell = editing
+            ? `<div style="display:grid;gap:6px;">
+                <label style="font-size:11px;color:#aaa;">${m.teams[0]}</label>
+                <input class="master-inline-input" id="masterPrice1_${m.id}" value="${String(p1).replace(/&/g,'&amp;').replace(/"/g,'&quot;')}" placeholder="เช่น 0.5">
+                <label style="font-size:11px;color:#aaa;">${m.teams[1]}</label>
+                <input class="master-inline-input" id="masterPrice2_${m.id}" value="${String(p2).replace(/&/g,'&amp;').replace(/"/g,'&quot;')}" placeholder="เช่น -0.5">
+            </div>`
+            : `${m.teams[0]}: <b>${p1 || '-'}</b><br>${m.teams[1]}: <b>${p2 || '-'}</b>`;
+
+        const waterCell = editing
+            ? `<input class="master-inline-input" id="masterWater_${m.id}" type="number" step="0.01" value="${water}" placeholder="1.8">`
+            : `<span style="color:#ff9800;font-weight:bold;">${water || '-'}</span>`;
+
+        const actions = editing
+            ? `<div class="master-edit-actions"><button class="master-save-btn" onclick="saveMasterInlineEdit(${m.id})">💾 บันทึก</button><button onclick="cancelMasterInlineEdit()">ยกเลิก</button></div>`
+            : `<button class="edit-btn" onclick="startMasterInlineEdit(${m.id})">✏️ แก้ราคา/น้ำ</button> <button class="${m.locked ? 'unlock-btn' : 'lock-btn'}" onclick="toggleLockMatch(${m.id})">${m.locked ? 'เปิดรับ' : 'ปิดรับ'}</button> <button class="danger" onclick="deleteMasterMatch(${m.id})">ลบ</button>`;
+
+        tbody.innerHTML += `
+            <tr>
+                <td>${m.date}</td>
+                <td>${m.time}</td>
+                <td>${m.name} ( ${m.teams[0]} / ${m.teams[1]} )</td>
+                <td style="font-size:12px;min-width:150px;">${priceCell}</td>
+                <td style="min-width:100px;">${waterCell}</td>
+                <td style="color:${m.locked ? '#f44336' : '#4caf50'};font-weight:bold;">${m.locked ? 'ปิดรับ' : 'เปิดรับ'}</td>
+                <td>${actions}</td>
+            </tr>
+        `;
     });
 }
 
 function updateBetFormDropdowns() {
+    const singleMatchSelect = document.getElementById('singleMatchSelect');
     const singleSelect = document.getElementById('singleTeam');
     const stepMatchSelect = document.getElementById('matchNameSelect');
-    singleSelect.innerHTML = '<option value="">-- เลือกทีมเต็ง --</option>';
+
+    if (!singleMatchSelect || !singleSelect || !stepMatchSelect) return;
+
+    singleMatchSelect.innerHTML = '<option value="">-- เลือกคู่บอล --</option>';
+    singleSelect.innerHTML = '<option value="">-- เลือกทีม --</option>';
     stepMatchSelect.innerHTML = '<option value="">-- เลือกคู่บอล --</option>';
-    matchesMasterList.filter(m => !m.locked).forEach(m => {
-        const leagueTag = m.league ? ` [${m.league}]` : '';
-        m.teams.forEach(team => {
-            const price = getMasterTeamPrice(m, team);
-            const water = getMasterWinOdds(m);
-            singleSelect.innerHTML += `<option value="${team}" data-match-id="${m.id}" data-price="${price}" data-water="${water}">${team} (${m.time})${leagueTag}${price ? ` | ราคา ${price}` : ''}</option>`;
+
+    const openMatches = matchesMasterList
+        .filter(m => !m.locked)
+        .sort((a, b) => {
+            const la = String(a.league || 'ไม่ระบุลีก');
+            const lb = String(b.league || 'ไม่ระบุลีก');
+            if (la !== lb) return la.localeCompare(lb, 'th');
+            return String(a.time || '').localeCompare(String(b.time || ''));
         });
-        stepMatchSelect.innerHTML += `<option value="${m.id}">${m.name} (${m.time})${leagueTag}</option>`;
+
+    const singleGroups = {};
+    const stepGroups = {};
+
+    openMatches.forEach(m => {
+        const league = String(m.league || 'ไม่ระบุลีก');
+        if (!singleGroups[league]) singleGroups[league] = [];
+        if (!stepGroups[league]) stepGroups[league] = [];
+        singleGroups[league].push(m);
+        stepGroups[league].push(m);
     });
+
+    Object.entries(singleGroups).forEach(([league, matches]) => {
+        const group = document.createElement('optgroup');
+        group.label = `🏆 ${league}`;
+        matches.forEach(m => {
+            const option = document.createElement('option');
+            option.value = String(m.id);
+            option.textContent = `${m.time} | ${m.teams[0]} - ${m.teams[1]}`;
+            group.appendChild(option);
+        });
+        singleMatchSelect.appendChild(group);
+    });
+
+    Object.entries(stepGroups).forEach(([league, matches]) => {
+        const group = document.createElement('optgroup');
+        group.label = `🏆 ${league}`;
+        matches.forEach(m => {
+            const option = document.createElement('option');
+            option.value = String(m.id);
+            option.textContent = `${m.time} | ${m.teams[0]} - ${m.teams[1]}`;
+            group.appendChild(option);
+        });
+        stepMatchSelect.appendChild(group);
+    });
+
+    updateSingleTeamForSingle();
     updateTeamDropdownForStep();
+}
+
+function updateSingleTeamForSingle() {
+    const matchSelect = document.getElementById('singleMatchSelect');
+    const teamSelect = document.getElementById('singleTeam');
+    const priceInput = document.getElementById('singlePrice');
+    if (!matchSelect || !teamSelect) return;
+
+    const matchId = matchSelect.value;
+    teamSelect.innerHTML = '<option value="">-- เลือกทีม --</option>';
+    if (priceInput) priceInput.value = '';
+
+    if (!matchId) return;
+
+    const match = matchesMasterList.find(m => String(m.id) === String(matchId));
+    if (!match) return;
+
+    match.teams.forEach(team => {
+        const price = getMasterTeamPrice(match, team);
+        const water = getMasterWinOdds(match);
+        const option = document.createElement('option');
+        option.value = team;
+        option.dataset.matchId = String(match.id);
+        option.dataset.price = price;
+        option.dataset.water = water;
+        option.textContent = `${team}${price ? ` | ราคา ${price}` : ''}`;
+        teamSelect.appendChild(option);
+    });
 }
 
 function updateSingleTeamPrice() {
@@ -1327,7 +1523,16 @@ function submitBet() {
         newBet.type = 'เต็ง';
         newBet.team = document.getElementById('singleTeam').value;
         const singleOpt = document.getElementById('singleTeam').options[document.getElementById('singleTeam').selectedIndex];
-        newBet.matches = [{ match: 'บอลเต็ง', team: newBet.team, price: singlePrice, status: 'pending', masterMatchId: singleOpt ? (singleOpt.dataset.matchId || null) : null }];
+        const singleMatchId = document.getElementById('singleMatchSelect')?.value || singleOpt?.dataset.matchId || null;
+        const singleMatch = matchesMasterList.find(m => String(m.id) === String(singleMatchId));
+        if (!singleMatchId || !newBet.team) { alert('กรุณาเลือกคู่บอลและทีมที่จะแทง'); return; }
+        newBet.matches = [{
+            match: singleMatch ? singleMatch.name : 'บอลเต็ง',
+            team: newBet.team,
+            price: document.getElementById('singlePrice')?.value.trim() || (singleOpt?.dataset.price || ''),
+            status: 'pending',
+            masterMatchId: singleMatchId
+        }];
     } else {
         if (currentMatches.length < 2) { alert('บอลสเต็ปต้องมีอย่างน้อย 2 คู่'); return; }
         newBet.type = `สเต็ป ${currentMatches.length} คู่`;
@@ -1505,7 +1710,17 @@ function editBet(id) {
     document.getElementById('betType').value = bet.betType;
     document.getElementById('betOdds').value = bet.winOdds || '';
     toggleStepMenu();
-    if (bet.betType === 'single') { ensureSingleTeamOption(bet.team); document.getElementById('singleTeam').value = bet.team || ''; if (document.getElementById('singlePrice')) document.getElementById('singlePrice').value = (bet.matches[0] && bet.matches[0].price) || ''; }
+    if (bet.betType === 'single') {
+        const oldMatchId = bet.matches[0]?.masterMatchId || '';
+        const matchSelect = document.getElementById('singleMatchSelect');
+        if (matchSelect && oldMatchId) {
+            matchSelect.value = String(oldMatchId);
+            updateSingleTeamForSingle();
+        }
+        ensureSingleTeamOption(bet.team);
+        document.getElementById('singleTeam').value = bet.team || '';
+        if (document.getElementById('singlePrice')) document.getElementById('singlePrice').value = (bet.matches[0] && bet.matches[0].price) || '';
+    }
     else { currentMatches = JSON.parse(JSON.stringify(bet.matches)); renderMatchList(); }
     document.getElementById('formTitle').innerText = '✏️ กำลังแก้ไขรายการ';
     document.getElementById('submitBtn').innerText = 'บันทึกการแก้ไข';
@@ -1524,7 +1739,17 @@ function duplicateBet(id) {
     document.getElementById('betType').value = bet.betType;
     document.getElementById('betOdds').value = bet.winOdds || '';
     toggleStepMenu();
-    if (bet.betType === 'single') { ensureSingleTeamOption(bet.team); document.getElementById('singleTeam').value = bet.team || ''; if (document.getElementById('singlePrice')) document.getElementById('singlePrice').value = (bet.matches[0] && bet.matches[0].price) || ''; }
+    if (bet.betType === 'single') {
+        const oldMatchId = bet.matches[0]?.masterMatchId || '';
+        const matchSelect = document.getElementById('singleMatchSelect');
+        if (matchSelect && oldMatchId) {
+            matchSelect.value = String(oldMatchId);
+            updateSingleTeamForSingle();
+        }
+        ensureSingleTeamOption(bet.team);
+        document.getElementById('singleTeam').value = bet.team || '';
+        if (document.getElementById('singlePrice')) document.getElementById('singlePrice').value = (bet.matches[0] && bet.matches[0].price) || '';
+    }
     else { currentMatches = JSON.parse(JSON.stringify(bet.matches)).map(m => ({...m, status: 'pending'})); renderMatchList(); }
     document.getElementById('formTitle').innerText = '📋 คัดลอกรายการแทง';
     document.getElementById('submitBtn').innerText = 'บันทึกรายการใหม่';
@@ -1556,6 +1781,8 @@ function cancelEdit() {
     document.getElementById('editId').value = '';
     document.getElementById('playerName').value = '';
     document.getElementById('stake').value = '';
+    if (document.getElementById('singleMatchSelect')) document.getElementById('singleMatchSelect').value = '';
+    document.getElementById('singleTeam').innerHTML = '<option value="">-- เลือกทีม --</option>';
     document.getElementById('singleTeam').value = '';
     if (document.getElementById('singlePrice')) document.getElementById('singlePrice').value = '';
     document.getElementById('betType').value = 'single';
